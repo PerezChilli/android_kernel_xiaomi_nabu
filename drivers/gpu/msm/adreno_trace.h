@@ -26,6 +26,40 @@
 #include "adreno_a4xx.h"
 #include "adreno_a5xx.h"
 
+#ifdef CONFIG_QCOM_KGSL_A640_CTX_PROFILE_TEST
+TRACE_EVENT(adreno_a640_context_profile,
+	TP_PROTO(u32 uid, u32 ctx, u32 ts, unsigned long fault,
+		u64 started, u64 retired, u64 ctx_start, u64 ctx_end),
+	TP_ARGS(uid, ctx, ts, fault, started, retired, ctx_start, ctx_end),
+	TP_STRUCT__entry(
+		__field(u32, uid)
+		__field(u32, ctx)
+		__field(u32, ts)
+		__field(unsigned long, fault)
+		__field(u64, started)
+		__field(u64, retired)
+		__field(u64, ctx_start)
+		__field(u64, ctx_end)
+	),
+	TP_fast_assign(
+		__entry->uid = uid;
+		__entry->ctx = ctx;
+		__entry->ts = ts;
+		__entry->fault = fault;
+		__entry->started = started;
+		__entry->retired = retired;
+		__entry->ctx_start = ctx_start;
+		__entry->ctx_end = ctx_end;
+	),
+	TP_printk("uid=%u ctx=%u ts=%u fault=%lu started=%llu retired=%llu ctx_start=%llu ctx_end=%llu",
+		__entry->uid, __entry->ctx, __entry->ts, __entry->fault,
+		(unsigned long long)__entry->started,
+		(unsigned long long)__entry->retired,
+		(unsigned long long)__entry->ctx_start,
+		(unsigned long long)__entry->ctx_end)
+);
+#endif
+
 TRACE_EVENT(adreno_cmdbatch_queued,
 	TP_PROTO(struct kgsl_drawobj *drawobj, unsigned int queued),
 	TP_ARGS(drawobj, queued),

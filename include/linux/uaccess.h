@@ -256,6 +256,9 @@ extern long notrace __probe_kernel_write(void *dst, const void *src, size_t size
 
 extern long strncpy_from_unsafe(char *dst, const void *unsafe_addr, long count);
 
+/* 1 if all zero, 0 if any nonzero, negative errno on user fault. */
+extern __must_check int check_zeroed_user(const void __user *from, size_t size);
+
 /**
  * probe_kernel_address(): safely attempt to read from a location
  * @addr: address to read from

@@ -120,6 +120,26 @@ again:
 	return ret;
 }
 
+/* Preserve __ns_get_path retry/refcount semantics for a namespace whose
+ * owner is determined by a callback, such as a BPF-offloaded netdevice.
+ */
+void *ns_get_path_cb(struct path *path,
+                     struct ns_common *(*get_ns)(void *),
+                     void *private_data)
+{
+        struct ns_common *ns;
+        void *ret;
+
+again:
+        ns = get_ns(private_data);
+        if (!ns)
+                return ERR_PTR(-ENOENT);
+        ret = __ns_get_path(path, ns);
+        if (IS_ERR(ret) && PTR_ERR(ret) == -EAGAIN)
+                goto again;
+        return ret;
+}
+
 int open_related_ns(struct ns_common *ns,
 		   struct ns_common *(*get_ns)(struct ns_common *ns))
 {
@@ -222,6 +242,18 @@ struct file *proc_ns_fget(int fd)
 out_invalid:
 	fput(file);
 	return ERR_PTR(-EINVAL);
+}
+
+/**
+ * ns_match() - compare a namespace against an nsfs device/inode pair.
+ *
+ * The BPF get_ns_current_pid_tgid helper uses this to reject mismatched
+ * namespace IDs. This is a real check against the mounted nsfs superblock,
+ * ported from Agate, not a permissive compatibility fallback.
+ */
+bool ns_match(const struct ns_common *ns, dev_t dev, ino_t ino)
+{
+	return ns->inum == ino && nsfs_mnt->mnt_sb->s_dev == dev;
 }
 
 static int nsfs_show_path(struct seq_file *seq, struct dentry *dentry)

@@ -549,10 +549,12 @@ static bool kprobe_prog_is_valid_access(int off, int size, enum bpf_access_type 
 	return true;
 }
 
-const struct bpf_verifier_ops kprobe_prog_ops = {
+const struct bpf_verifier_ops kprobe_verifier_ops = {
 	.get_func_proto  = kprobe_prog_func_proto,
 	.is_valid_access = kprobe_prog_is_valid_access,
 };
+
+const struct bpf_prog_ops kprobe_prog_ops = { };
 
 BPF_CALL_5(bpf_perf_event_output_tp, void *, tp_buff, struct bpf_map *, map,
 	   u64, flags, void *, data, u64, size)
@@ -577,6 +579,8 @@ static const struct bpf_func_proto bpf_perf_event_output_proto_tp = {
 	.arg4_type	= ARG_PTR_TO_MEM,
 	.arg5_type	= ARG_CONST_SIZE,
 };
+
+u64 bpf_get_stackid(u64, u64, u64, u64, u64);
 
 BPF_CALL_3(bpf_get_stackid_tp, void *, tp_buff, struct bpf_map *, map,
 	   u64, flags)
@@ -629,10 +633,85 @@ static bool tp_prog_is_valid_access(int off, int size, enum bpf_access_type type
 	return true;
 }
 
-const struct bpf_verifier_ops tracepoint_prog_ops = {
+const struct bpf_verifier_ops tracepoint_verifier_ops = {
 	.get_func_proto  = tp_prog_func_proto,
 	.is_valid_access = tp_prog_is_valid_access,
 };
+
+const struct bpf_prog_ops tracepoint_prog_ops = { };
+
+/* Raw tracepoint programs consume a fixed array of u64 arguments.  The
+ * tracepoint metadata check in bpf_probe_register() provides the tighter
+ * per-tracepoint bound when the program is attached to its target.
+ *
+ * Until the raw-tp variants of perf_event_output/get_stackid/get_stack are
+ * ported with their own re-entrant pt_regs handling, expose only the
+ * existing tracing helpers that do not reinterpret raw-tp context as pt_regs.
+ */
+static const struct bpf_func_proto *
+raw_tp_prog_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
+{
+	return tracing_func_proto(func_id, prog);
+}
+
+static bool raw_tp_prog_is_valid_access(int off, int size,
+				       enum bpf_access_type type,
+				       const struct bpf_prog *prog,
+				       struct bpf_insn_access_aux *info)
+{
+	return type == BPF_READ && off >= 0 &&
+	       size == sizeof(u64) && !(off % sizeof(u64)) &&
+	       off <= (MAX_BPF_FUNC_ARGS - 1) * sizeof(u64);
+}
+
+const struct bpf_verifier_ops raw_tracepoint_verifier_ops = {
+	.get_func_proto  = raw_tp_prog_func_proto,
+	.is_valid_access = raw_tp_prog_is_valid_access,
+};
+
+/* No TEST_RUN handler is advertised until the proper raw-tp execution
+ * environment has been integrated. */
+const struct bpf_prog_ops raw_tracepoint_prog_ops = { };
+
+static bool raw_tp_writable_prog_is_valid_access(int off, int size,
+						enum bpf_access_type type,
+						const struct bpf_prog *prog,
+						struct bpf_insn_access_aux *info)
+{
+	if (!raw_tp_prog_is_valid_access(off, size, type, prog, info))
+		return false;
+	if (off == 0)
+		info->reg_type = PTR_TO_TP_BUFFER;
+	return true;
+}
+
+const struct bpf_verifier_ops raw_tracepoint_writable_verifier_ops = {
+	.get_func_proto  = raw_tp_prog_func_proto,
+	.is_valid_access = raw_tp_writable_prog_is_valid_access,
+};
+const struct bpf_prog_ops raw_tracepoint_writable_prog_ops = { };
+
+static bool tracing_prog_is_valid_access(int off, int size,
+				 enum bpf_access_type type,
+				 const struct bpf_prog *prog,
+				 struct bpf_insn_access_aux *info)
+{
+	if (off < 0 || off >= sizeof(u64) * MAX_BPF_FUNC_ARGS ||
+	    type != BPF_READ || size != sizeof(u64) ||
+	    off % sizeof(u64))
+		return false;
+
+	/* The tracing program context is described by its BTF attach target. */
+	if (!prog->aux->attach_func_proto)
+		return false;
+	return btf_ctx_access(off, size, type, prog, info);
+}
+
+const struct bpf_verifier_ops tracing_verifier_ops = {
+	.get_func_proto  = tracing_func_proto,
+	.is_valid_access = tracing_prog_is_valid_access,
+};
+const struct bpf_prog_ops tracing_prog_ops = { };
 
 static bool pe_prog_is_valid_access(int off, int size, enum bpf_access_type type,
 				    const struct bpf_prog *prog,
@@ -690,11 +769,13 @@ static u32 pe_prog_convert_ctx_access(enum bpf_access_type type,
 	return insn - insn_buf;
 }
 
-const struct bpf_verifier_ops perf_event_prog_ops = {
+const struct bpf_verifier_ops perf_event_verifier_ops = {
 	.get_func_proto		= tp_prog_func_proto,
 	.is_valid_access	= pe_prog_is_valid_access,
 	.convert_ctx_access	= pe_prog_convert_ctx_access,
 };
+
+const struct bpf_prog_ops perf_event_prog_ops = { };
 
 static DEFINE_MUTEX(bpf_event_mutex);
 

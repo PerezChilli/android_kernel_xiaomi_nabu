@@ -1049,6 +1049,22 @@ static inline int atomic_dec_if_positive(atomic_t *v)
 #define atomic64_try_cmpxchg_release	atomic64_try_cmpxchg
 #endif /* atomic64_try_cmpxchg */
 
+/* Backport: atomically add unless equal; return the previous value. */
+#ifndef atomic64_fetch_add_unless
+static inline long long atomic64_fetch_add_unless(atomic64_t *v, long long a,
+                                                   long long u)
+{
+    long long c = atomic64_read(v);
+
+    do {
+        if (unlikely(c == u))
+            break;
+    } while (!atomic64_try_cmpxchg(v, &c, c + a));
+
+    return c;
+}
+#endif
+
 #ifndef atomic64_andnot
 static inline void atomic64_andnot(long long i, atomic64_t *v)
 {

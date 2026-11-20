@@ -691,10 +691,46 @@ static char *kstruprdup(const char *str, gfp_t gfp)
 	return ret;
 }
 
+/*
+ * nabu BMS: only these tuning/diagnostic properties may be omitted from
+ * uevent if the fixed 2 KiB buffer cannot hold the whole key/value pair.
+ * They remain fully readable in sysfs. Do not omit cycle counters, state of
+ * charge, current, voltage, temperature, or battery health metrics.
+ * Recovered behaviour: the exact Stage28 optional-property list is unknown.
+ */
+/* kobject_uevent_env() appends SEQNUM after the power-supply callback.
+ * A u64 decimal sequence needs at most 20 digits, plus "SEQNUM=" and NUL.
+ * Reserve one envp slot as well.  Leave the global 2 KiB limit unchanged.
+ */
+#define NABU_BMS_SEQNUM_RESERVE (sizeof("SEQNUM=") + 20)
+
+static bool power_supply_bms_optional_uevent_property(
+		enum power_supply_property prop)
+{
+	switch (prop) {
+	case POWER_SUPPLY_PROP_CC_STEP:
+	case POWER_SUPPLY_PROP_CC_STEP_SEL:
+	case POWER_SUPPLY_PROP_CLEAR_SOH:
+	case POWER_SUPPLY_PROP_DEBUG_BATTERY:
+	case POWER_SUPPLY_PROP_SCALE_MODE_EN:
+	case POWER_SUPPLY_PROP_CALIBRATE:
+	case POWER_SUPPLY_PROP_FFC_TERMINATION_CURRENT:
+	case POWER_SUPPLY_PROP_SYS_TERMINATION_CURRENT:
+	case POWER_SUPPLY_PROP_FFC_SYS_TERMINATION_CURRENT:
+	case POWER_SUPPLY_PROP_VBATT_FULL_VOL:
+	case POWER_SUPPLY_PROP_FFC_VBATT_FULL_VOL:
+	case POWER_SUPPLY_PROP_KI_COEFF_CURRENT:
+		return true;
+	default:
+		return false;
+	}
+}
+
 int power_supply_uevent(struct device *dev, struct kobj_uevent_env *env)
 {
 	struct power_supply *psy = dev_get_drvdata(dev);
-	int ret = 0, j;
+	int ret = 0, j, pass;
+	bool nabu_bms;
 	char *prop_buf;
 	char *attrname;
 
@@ -704,44 +740,101 @@ int power_supply_uevent(struct device *dev, struct kobj_uevent_env *env)
 	}
 
 	ret = add_uevent_var(env, "POWER_SUPPLY_NAME=%s", psy->desc->name);
-	if (ret)
+	if (ret) {
+		dev_warn_ratelimited(dev,
+			"uevent add failed: supply=%s property=NAME "
+			"used=%d/%zu vars=%d/%zu rc=%d\n",
+			psy->desc->name, env->buflen, sizeof(env->buf),
+			env->envp_idx, ARRAY_SIZE(env->envp), ret);
 		return ret;
+	}
 
 	prop_buf = (char *)get_zeroed_page(GFP_KERNEL);
 	if (!prop_buf)
 		return -ENOMEM;
 
-	for (j = 0; j < psy->desc->num_properties; j++) {
-		struct device_attribute *attr;
-		char *line;
+	/* Emit essential BMS keys first, optional tuning keys second, so that
+	 * the latter cannot prevent Android battery state from being reported.
+	 * Other power supplies retain the original single-pass ordering.
+	 */
+	nabu_bms = !strcmp(psy->desc->name, "bms");
+	for (pass = 0; pass < (nabu_bms ? 2 : 1); pass++) {
+		for (j = 0; j < psy->desc->num_properties; j++) {
+			struct device_attribute *attr;
+			bool optional = nabu_bms &&
+				power_supply_bms_optional_uevent_property(
+					psy->desc->properties[j]);
+			char *line;
 
-		attr = &power_supply_attrs[psy->desc->properties[j]];
+			if (nabu_bms && (optional != (pass == 1)))
+				continue;
+			attr = &power_supply_attrs[psy->desc->properties[j]];
 
-		ret = power_supply_show_property(dev, attr, prop_buf);
-		if (ret == -ENODEV || ret == -ENODATA) {
-			/* When a battery is absent, we expect -ENODEV. Don't abort;
-			   send the uevent with at least the the PRESENT=0 property */
-			ret = 0;
-			continue;
+			ret = power_supply_show_property(dev, attr, prop_buf);
+			if (ret == -ENODEV || ret == -ENODATA) {
+				/* When a battery is absent, we expect -ENODEV. Don't abort;
+				   send the uevent with at least the the PRESENT=0 property */
+				ret = 0;
+				continue;
+			}
+
+			if (ret < 0)
+				goto out;
+
+			line = strchr(prop_buf, '\n');
+			if (line)
+				*line = 0;
+
+			attrname = kstruprdup(attr->attr.name, GFP_KERNEL);
+			if (!attrname) {
+				ret = -ENOMEM;
+				goto out;
+			}
+
+			/* Preserve space for the SEQNUM that kobject_uevent_env() adds
+			 * after our callback, including its NUL and final envp slot.
+			 * All mandatory BMS keys are emitted before optional keys.
+			 */
+			if (nabu_bms) {
+				size_t needed = strlen("POWER_SUPPLY_") +
+					strlen(attrname) + 1 + strlen(prop_buf) + 1;
+				size_t available = env->buflen <= sizeof(env->buf) ?
+					sizeof(env->buf) - env->buflen : 0;
+
+				if (available < NABU_BMS_SEQNUM_RESERVE ||
+				    needed > available - NABU_BMS_SEQNUM_RESERVE ||
+				    env->envp_idx >= ARRAY_SIZE(env->envp) - 1) {
+					if (optional) {
+						dev_dbg_ratelimited(dev,
+							"bms uevent: skipping oversized optional %s\n",
+							attr->attr.name);
+						kfree(attrname);
+						ret = 0;
+						continue;
+					}
+					dev_warn_ratelimited(dev,
+						"bms uevent: mandatory property %s cannot fit "
+						"with SEQNUM reserve (used=%d/%zu vars=%d/%zu)\n",
+						attr->attr.name, env->buflen,
+						sizeof(env->buf), env->envp_idx,
+						ARRAY_SIZE(env->envp));
+					kfree(attrname);
+					ret = -ENOSPC;
+					goto out;
+				}
+			}
+			ret = add_uevent_var(env, "POWER_SUPPLY_%s=%s", attrname, prop_buf);
+			if (ret)
+				dev_warn_ratelimited(dev,
+					"uevent add failed: supply=%s property=%s "
+					"value_len=%zu used=%d/%zu vars=%d/%zu rc=%d\n",
+					psy->desc->name, attr->attr.name,
+					strlen(prop_buf), env->buflen, sizeof(env->buf),
+					env->envp_idx, ARRAY_SIZE(env->envp), ret);
+			kfree(attrname);
+			if (ret)
+				goto out;
 		}
-
-		if (ret < 0)
-			goto out;
-
-		line = strchr(prop_buf, '\n');
-		if (line)
-			*line = 0;
-
-		attrname = kstruprdup(attr->attr.name, GFP_KERNEL);
-		if (!attrname) {
-			ret = -ENOMEM;
-			goto out;
-		}
-
-		ret = add_uevent_var(env, "POWER_SUPPLY_%s=%s", attrname, prop_buf);
-		kfree(attrname);
-		if (ret)
-			goto out;
 	}
 
 out:

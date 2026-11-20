@@ -9,6 +9,7 @@
  */
 
 #include <linux/vmalloc.h>
+#include <linux/set_memory.h>
 #include <linux/mm.h>
 #include <linux/module.h>
 #include <linux/highmem.h>
@@ -1630,7 +1631,15 @@ static void __vunmap(const void *addr, int deallocate_pages)
 	debug_check_no_locks_freed(addr, get_vm_area_size(area));
 	debug_check_no_obj_freed(addr, get_vm_area_size(area));
 
+	/* BPF JIT memory was made read-only/executable. Restore safe page
+	 * permissions before releasing pages to the page allocator. */
+	if (area->flags & VM_FLUSH_RESET_PERMS) {
+		WARN_ON_ONCE(set_memory_nx((unsigned long)addr, area->nr_pages));
+		WARN_ON_ONCE(set_memory_rw((unsigned long)addr, area->nr_pages));
+	}
 	remove_vm_area(addr);
+	if (area->flags & VM_FLUSH_RESET_PERMS)
+		vm_unmap_aliases();
 	if (deallocate_pages) {
 		int i;
 
@@ -1995,6 +2004,15 @@ void *vmalloc_user(unsigned long size)
 	return ret;
 }
 EXPORT_SYMBOL(vmalloc_user);
+
+/* User-mappable zeroed vmalloc allocation with caller-selected NUMA node. */
+void *vmalloc_user_node_flags(unsigned long size, int node, gfp_t flags)
+{
+    return __vmalloc_node_range(size, SHMLBA, VMALLOC_START, VMALLOC_END,
+                                flags | __GFP_ZERO, PAGE_KERNEL,
+                                VM_USERMAP, node, __builtin_return_address(0));
+}
+EXPORT_SYMBOL(vmalloc_user_node_flags);
 
 /**
  *	vmalloc_node  -  allocate memory on a specific node

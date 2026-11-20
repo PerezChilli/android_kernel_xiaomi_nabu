@@ -3849,6 +3849,29 @@ inline struct dentry *user_path_create(int dfd, const char __user *pathname,
 }
 EXPORT_SYMBOL(user_path_create);
 
+/* Backport from Agate: VFS creation callback with the ordinary inode-create
+ * permission, LSM, and fsnotify checks. Used for bpffs object pinning.
+ */
+int vfs_mkobj(struct dentry *dentry, umode_t mode,
+              int (*f)(struct dentry *, umode_t, void *), void *arg)
+{
+	struct inode *dir = dentry->d_parent->d_inode;
+	int error = may_create(NULL, dir, dentry);
+
+	if (error)
+		return error;
+	mode &= S_IALLUGO;
+	mode |= S_IFREG;
+	error = security_inode_create(dir, dentry, mode);
+	if (error)
+		return error;
+	error = f(dentry, mode, arg);
+	if (!error)
+		fsnotify_create(dir, dentry);
+	return error;
+}
+EXPORT_SYMBOL(vfs_mkobj);
+
 int vfs_mknod2(struct vfsmount *mnt, struct inode *dir, struct dentry *dentry, umode_t mode, dev_t dev)
 {
 	int error = may_create(mnt, dir, dentry);

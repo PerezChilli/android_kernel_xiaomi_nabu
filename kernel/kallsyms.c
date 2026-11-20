@@ -25,6 +25,9 @@
 #include <linux/slab.h>
 #include <linux/filter.h>
 #include <linux/compiler.h>
+#include <linux/printk.h>
+#include <linux/security.h>
+#include <linux/user_namespace.h>
 
 #include <asm/sections.h>
 
@@ -658,6 +661,32 @@ static const struct seq_operations kallsyms_op = {
 	.stop = s_stop,
 	.show = s_show
 };
+
+static bool kallsyms_for_perf(void)
+{
+#ifdef CONFIG_PERF_EVENTS
+	extern int sysctl_perf_event_paranoid;
+	if (sysctl_perf_event_paranoid <= 1)
+		return true;
+#endif
+	return false;
+}
+
+bool kallsyms_show_value(const struct cred *cred)
+{
+	switch (kptr_restrict) {
+	case 0:
+		if (kallsyms_for_perf())
+			return true;
+		/* fall through */
+	case 1:
+		if (!security_capable(cred, &init_user_ns, CAP_SYSLOG))
+			return true;
+		/* fall through */
+	default:
+		return false;
+	}
+}
 
 static int kallsyms_open(struct inode *inode, struct file *file)
 {

@@ -27,6 +27,7 @@
 #include <linux/ptrace.h>
 #include <uapi/linux/audit.h>
 
+#define AUDIT_OFF	0
 #define AUDIT_INO_UNSET ((unsigned long)-1)
 #define AUDIT_DEV_UNSET ((dev_t)-1)
 

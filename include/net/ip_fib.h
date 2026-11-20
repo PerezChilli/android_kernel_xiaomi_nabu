@@ -149,6 +149,8 @@ struct fib_result {
 	struct hlist_head *fa_head;
 };
 
+u32 ip_mtu_from_fib_result(struct fib_result *res, __be32 daddr);
+
 struct fib_result_nl {
 	__be32		fl_addr;   /* To be looked up*/
 	u32		fl_mark;

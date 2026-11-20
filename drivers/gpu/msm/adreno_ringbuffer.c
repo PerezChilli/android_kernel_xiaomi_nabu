@@ -29,6 +29,7 @@
 #include "adreno_trace.h"
 
 #include "a3xx_reg.h"
+#include "a6xx_reg.h"
 #include "adreno_a5xx.h"
 
 #define RB_HOSTPTR(_rb, _pos) \
@@ -930,6 +931,21 @@ static inline int _get_alwayson_counter(struct adreno_device *adreno_dev,
 	return (unsigned int)(p - cmds);
 }
 
+#ifdef CONFIG_QCOM_KGSL_A640_CTX_PROFILE_TEST
+/* A640 raw per-context CP counter; 2-dword GPU address is required. */
+static inline unsigned int a640_get_context_counter(struct adreno_device *adreno_dev,
+		u32 *cmds, u64 gpuaddr)
+{
+	u32 *p = cmds;
+
+	*p++ = cp_mem_packet(adreno_dev, CP_REG_TO_MEM, 2, 1);
+	*p++ = A6XX_CP_ALWAYS_ON_CONTEXT_LO | (1U << 30) | (2U << 18);
+	p += cp_gpuaddr(adreno_dev, p, gpuaddr);
+
+	return (unsigned int)(p - cmds);
+}
+#endif
+
 /* This is the maximum possible size for 64 bit targets */
 #define PROFILE_IB_DWORDS 4
 #define PROFILE_IB_SLOTS (PAGE_SIZE / (PROFILE_IB_DWORDS << 2))
@@ -1086,6 +1102,11 @@ int adreno_ringbuffer_submitcmd(struct adreno_device *adreno_dev,
 		dwords += 6;
 		if (!ADRENO_LEGACY_PM4(adreno_dev))
 			dwords += 2;
+#ifdef CONFIG_QCOM_KGSL_A640_CTX_PROFILE_TEST
+		/* Two extra 64-bit CP_REG_TO_MEM packets for A640 only. */
+		if (adreno_is_a640(adreno_dev))
+			dwords += 8;
+#endif
 	}
 
 	if (adreno_is_preemption_enabled(adreno_dev))
@@ -1122,6 +1143,13 @@ int adreno_ringbuffer_submitcmd(struct adreno_device *adreno_dev,
 			adreno_dev->profile_buffer.gpuaddr +
 			ADRENO_DRAWOBJ_PROFILE_OFFSET(cmdobj->profile_index,
 				started));
+#ifdef CONFIG_QCOM_KGSL_A640_CTX_PROFILE_TEST
+		if (adreno_is_a640(adreno_dev))
+			cmds += a640_get_context_counter(adreno_dev, cmds,
+				adreno_dev->profile_buffer.gpuaddr +
+				ADRENO_DRAWOBJ_PROFILE_OFFSET(cmdobj->profile_index,
+					ctx_start));
+#endif
 	}
 
 	/*
@@ -1174,6 +1202,13 @@ int adreno_ringbuffer_submitcmd(struct adreno_device *adreno_dev,
 			adreno_dev->profile_buffer.gpuaddr +
 			ADRENO_DRAWOBJ_PROFILE_OFFSET(cmdobj->profile_index,
 				retired));
+#ifdef CONFIG_QCOM_KGSL_A640_CTX_PROFILE_TEST
+		if (adreno_is_a640(adreno_dev))
+			cmds += a640_get_context_counter(adreno_dev, cmds,
+				adreno_dev->profile_buffer.gpuaddr +
+				ADRENO_DRAWOBJ_PROFILE_OFFSET(cmdobj->profile_index,
+					ctx_end));
+#endif
 	}
 
 	/*

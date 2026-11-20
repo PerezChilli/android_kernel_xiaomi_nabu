@@ -10,6 +10,7 @@
  */
 
 #include <linux/perf_event.h>
+#include <linux/stacktrace.h>
 #include <linux/slab.h>
 #include <linux/sched/task_stack.h>
 
@@ -173,6 +174,35 @@ static void
 put_callchain_entry(int rctx)
 {
 	put_recursion_context(this_cpu_ptr(callchain_recursion), rctx);
+}
+
+/* Perf 4.14-compatible task callchain capture for BPF stack maps. */
+struct perf_callchain_entry *
+perf_get_callchain_entry_for_task(struct task_struct *task, u32 max_depth)
+{
+#ifdef CONFIG_STACKTRACE
+        struct perf_callchain_entry *entry;
+        struct stack_trace trace;
+        int rctx;
+
+        entry = get_callchain_entry(&rctx);
+        if (!entry)
+                return NULL;
+
+        trace.entries = (unsigned long *)entry->ip;
+        trace.nr_entries = 0;
+        trace.max_entries = min_t(u32, max_depth,
+                                  sysctl_perf_event_max_stack);
+        trace.skip = 0;
+        save_stack_trace_tsk(task, &trace);
+        entry->nr = trace.nr_entries;
+        if (entry->nr && entry->ip[entry->nr - 1] == ULONG_MAX)
+                entry->nr--;
+        put_callchain_entry(rctx);
+        return entry;
+#else
+        return NULL;
+#endif
 }
 
 struct perf_callchain_entry *

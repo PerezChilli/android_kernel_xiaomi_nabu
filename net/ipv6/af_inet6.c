@@ -297,8 +297,9 @@ int inet6_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
 }
 EXPORT_SYMBOL(inet6_bind);
 
-int __inet6_bind(struct sock *sk, struct sockaddr *uaddr, int addr_len,
-		 bool force_bind_address_no_port, bool with_lock)
+static int __inet6_bind_common(struct sock *sk, struct sockaddr *uaddr,
+		int addr_len, bool force_bind_address_no_port,
+		bool with_lock, bool from_bpf)
 {
 	struct sockaddr_in6 *addr = (struct sockaddr_in6 *)uaddr;
 	struct inet_sock *inet = inet_sk(sk);
@@ -434,11 +435,13 @@ int __inet6_bind(struct sock *sk, struct sockaddr *uaddr, int addr_len,
 			err = -EADDRINUSE;
 			goto out;
 		}
-		err = BPF_CGROUP_RUN_PROG_INET6_POST_BIND(sk);
-		if (err) {
-			sk->sk_ipv6only = saved_ipv6only;
-			inet_reset_saddr(sk);
-			goto out;
+		if (!from_bpf) {
+			err = BPF_CGROUP_RUN_PROG_INET6_POST_BIND(sk);
+			if (err) {
+				sk->sk_ipv6only = saved_ipv6only;
+				inet_reset_saddr(sk);
+				goto out;
+			}
 		}
 	}
 
@@ -456,6 +459,21 @@ out:
 out_unlock:
 	rcu_read_unlock();
 	goto out;
+}
+
+int __inet6_bind(struct sock *sk, struct sockaddr *uaddr, int addr_len,
+		 bool force_bind_address_no_port, bool with_lock)
+{
+	return __inet6_bind_common(sk, uaddr, addr_len,
+			force_bind_address_no_port, with_lock, false);
+}
+
+static int __inet6_bind_bpf(struct sock *sk, struct sockaddr *uaddr,
+			     int addr_len, bool force_bind_address_no_port,
+			     bool with_lock)
+{
+	return __inet6_bind_common(sk, uaddr, addr_len,
+			force_bind_address_no_port, with_lock, true);
 }
 
 int inet6_release(struct socket *sock)
@@ -895,6 +913,25 @@ static struct pernet_operations inet6_net_ops = {
 	.exit = inet6_net_exit,
 };
 
+#if IS_ENABLED(CONFIG_BPF_SYSCALL)
+/* Perf 4.14 uses reference-counted rt6_info, not the newer fib6_info. */
+static struct rt6_info *ipv6_bpf_fib6_lookup(struct net *net,
+					    struct flowi6 *fl6, u32 tbid,
+					    int oif, int flags, bool direct)
+{
+	struct fib6_table *tb;
+
+	if (!direct)
+		return (struct rt6_info *)ip6_route_lookup(net, fl6, flags);
+
+	tb = fib6_get_table(net, tbid);
+	if (!tb)
+		return NULL;
+
+	return ip6_pol_route(net, tb, oif, fl6, flags);
+}
+#endif
+
 static const struct ipv6_stub ipv6_stub_impl = {
 	.ipv6_sock_mc_join = ipv6_sock_mc_join,
 	.ipv6_sock_mc_drop = ipv6_sock_mc_drop,
@@ -902,10 +939,14 @@ static const struct ipv6_stub ipv6_stub_impl = {
 	.udpv6_encap_enable = udpv6_encap_enable,
 	.ndisc_send_na = ndisc_send_na,
 	.nd_tbl	= &nd_tbl,
+#if IS_ENABLED(CONFIG_BPF_SYSCALL)
+	.bpf_fib6_lookup = ipv6_bpf_fib6_lookup,
+#endif
 };
 
 static const struct ipv6_bpf_stub ipv6_bpf_stub_impl = {
-	.inet6_bind = __inet6_bind,
+	.inet6_bind = __inet6_bind_bpf,
+	.udp6_lib_lookup = __udp6_lib_lookup,
 };
 
 static int __init inet6_init(void)

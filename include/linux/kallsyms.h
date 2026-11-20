@@ -15,10 +15,12 @@
 			 2*(BITS_PER_LONG*3/10) + (MODULE_NAME_LEN - 1) + 1)
 
 struct module;
+struct cred;
 
 #ifdef CONFIG_KALLSYMS
 /* Lookup the address for a symbol. Returns 0 if not found. */
 unsigned long kallsyms_lookup_name(const char *name);
+bool kallsyms_show_value(const struct cred *cred);
 
 /* Call a function on each kallsyms symbol in the core kernel */
 int kallsyms_on_each_symbol(int (*fn)(void *, const char *, struct module *,
@@ -47,6 +49,11 @@ int lookup_symbol_name(unsigned long addr, char *symname);
 int lookup_symbol_attrs(unsigned long addr, unsigned long *size, unsigned long *offset, char *modname, char *name);
 
 #else /* !CONFIG_KALLSYMS */
+
+static inline bool kallsyms_show_value(const struct cred *cred)
+{
+	return false;
+}
 
 static inline unsigned long kallsyms_lookup_name(const char *name)
 {

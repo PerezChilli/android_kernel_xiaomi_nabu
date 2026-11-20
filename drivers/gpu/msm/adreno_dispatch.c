@@ -20,6 +20,7 @@
 #include "kgsl.h"
 #include "kgsl_sharedmem.h"
 #include "adreno.h"
+#include "kgsl_gpu_work_period.h"
 #include "adreno_ringbuffer.h"
 #include "adreno_trace.h"
 #include "kgsl_sharedmem.h"
@@ -2343,8 +2344,31 @@ static void retire_cmdobj(struct adreno_device *adreno_dev,
 		_print_recovery(KGSL_DEVICE(adreno_dev), cmdobj);
 	}
 
-	if (test_bit(CMDOBJ_PROFILE, &cmdobj->priv))
+	if (test_bit(CMDOBJ_PROFILE, &cmdobj->priv)) {
 		cmdobj_profile_ticks(adreno_dev, cmdobj, &start, &end);
+#ifdef CONFIG_QCOM_KGSL_A640_CTX_PROFILE_TEST
+		if (adreno_is_a640(adreno_dev) &&
+		    !(drawobj->context->flags & KGSL_CONTEXT_SECURE)) {
+			struct adreno_drawobj_profile_entry *profile =
+				(struct adreno_drawobj_profile_entry *)
+				(adreno_dev->profile_buffer.hostptr +
+				 cmdobj->profile_index *
+				 sizeof(struct adreno_drawobj_profile_entry));
+			u32 uid = drawobj->context->proc_priv ?
+				drawobj->context->proc_priv->uid : (u32)-1;
+
+			trace_adreno_a640_context_profile(uid,
+				drawobj->context->id, drawobj->timestamp,
+				cmdobj->fault_recovery, start, end,
+				profile->ctx_start, profile->ctx_end);
+#ifdef CONFIG_QCOM_KGSL_GPU_WORK_PERIOD
+			if (!cmdobj->fault_recovery && uid != (u32)-1)
+				kgsl_gpuwork_account(uid, profile->ctx_start,
+					profile->ctx_end);
+#endif
+		}
+#endif
+	}
 
 	/*
 	 * For A3xx we still get the rptr from the CP_RB_RPTR instead of

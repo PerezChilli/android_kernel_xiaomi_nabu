@@ -31,3 +31,24 @@ unsigned long _copy_to_user(void __user *to, const void *from, unsigned long n)
 }
 EXPORT_SYMBOL(_copy_to_user);
 #endif
+
+/*
+ * Small bounded userspace tail check used by BPF attr compatibility.
+ * The caller rejects sizes > PAGE_SIZE. Return 1 for zeroes, 0 for
+ * nonzero bytes, -EFAULT for inaccessible user memory.
+ */
+int check_zeroed_user(const void __user *from, size_t size)
+{
+    const unsigned char __user *p = from;
+    unsigned char byte;
+    size_t i;
+
+    for (i = 0; i < size; i++) {
+        if (get_user(byte, p + i))
+            return -EFAULT;
+        if (byte)
+            return 0;
+    }
+    return 1;
+}
+EXPORT_SYMBOL(check_zeroed_user);

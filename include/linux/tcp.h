@@ -182,6 +182,7 @@ struct tcp_sock {
 				 * sum(delta(snd_una)), or how many bytes
 				 * were acked.
 				 */
+	u32	dsack_dups;	/* Number of duplicate-SACK blocks seen */
  	u32	snd_una;	/* First byte we want an ack for	*/
  	u32	snd_sml;	/* Last byte of the most recently transmitted small packet */
 	u32	rcv_tstamp;	/* timestamp of last received ACK (for keepalives) */
@@ -271,6 +272,7 @@ struct tcp_sock {
 				 * receiver in Recovery. */
 	u32	prr_out;	/* Total number of pkts sent during Recovery. */
 	u32	delivered;	/* Total data packets delivered incl. rexmits */
+	u32	delivered_ce;	/* Delivered packets acknowledged with ECE */
 	u32	lost;		/* Total data packets lost incl. rexmits */
 	u32	app_limited;	/* limited until "delivered" reaches this val */
 	u64	first_tx_mstamp;  /* start of window send phase */
@@ -286,6 +288,10 @@ struct tcp_sock {
 	u32	sacked_out;	/* SACK'd packets			*/
 	u32	fackets_out;	/* FACK'd packets			*/
 
+	/* Optional sock-ops callbacks selected by cgroup BPF. */
+#ifdef CONFIG_BPF
+	u8	bpf_sock_ops_cb_flags;
+#endif
 	struct hrtimer	pacing_timer;
 
 	/* from STCP, retrans queue hinting */

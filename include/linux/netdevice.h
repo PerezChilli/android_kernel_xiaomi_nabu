@@ -67,6 +67,8 @@ struct mpls_dev;
 struct udp_tunnel_info;
 struct bpf_prog;
 struct xdp_buff;
+struct xdp_frame;
+struct xdp_dev_bulk_queue;
 
 void netdev_set_default_ethtool_ops(struct net_device *dev,
 				    const struct ethtool_ops *ops);
@@ -800,9 +802,13 @@ enum bpf_netdev_command {
 	BPF_OFFLOAD_VERIFIER_PREP,
 	BPF_OFFLOAD_TRANSLATE,
 	BPF_OFFLOAD_DESTROY,
+	/* Optional hardware offload map lifecycle commands. */
+	BPF_OFFLOAD_MAP_ALLOC,
+	BPF_OFFLOAD_MAP_FREE,
 };
 
 struct bpf_ext_analyzer_ops;
+struct bpf_offloaded_map;
 struct netlink_ext_ack;
 
 struct netdev_bpf {
@@ -818,7 +824,10 @@ struct netdev_bpf {
 		struct {
 			u8 prog_attached;
 			u32 prog_id;
+		u32 prog_flags;
 		};
+		/* BPF_OFFLOAD_MAP_ALLOC/FREE */
+		struct bpf_offloaded_map *offmap;
 		/* BPF_OFFLOAD_VERIFIER_PREP */
 		struct {
 			struct bpf_prog *prog;
@@ -1346,6 +1355,8 @@ struct net_device_ops {
 						      int queue_index,
 						      u32 maxrate);
 	int			(*ndo_get_iflink)(const struct net_device *dev);
+	/* Optional peer selection for BPF_F_PEER; absent on most devices. */
+	struct net_device *	(*ndo_get_peer_dev)(struct net_device *dev);
 	int			(*ndo_change_proto_down)(struct net_device *dev,
 							 bool proto_down);
 	int			(*ndo_fill_metadata_dst)(struct net_device *dev,
@@ -1356,6 +1367,12 @@ struct net_device_ops {
 					   struct netdev_bpf *bpf);
 	int			(*ndo_xdp_xmit)(struct net_device *dev,
 						struct xdp_buff *xdp);
+	/* Native XDP frame batching is a separate, newer driver ABI.
+	 * Keep the legacy ndo_xdp_xmit signature for Perf drivers.
+	 */
+	int			(*ndo_xdp_xmit_batch)(struct net_device *dev,
+						int n, struct xdp_frame **frames,
+						u32 flags);
 	void			(*ndo_xdp_flush)(struct net_device *dev);
 };
 
@@ -1837,6 +1854,8 @@ struct net_device {
 #endif
 
 	struct bpf_prog __rcu	*xdp_prog;
+	/* Per-CPU native XDP redirect batches, allocated by devmap notifier. */
+	struct xdp_dev_bulk_queue __percpu *xdp_bulkq;
 	unsigned long		gro_flush_timeout;
 	rx_handler_func_t __rcu	*rx_handler;
 	void __rcu		*rx_handler_data;
@@ -2499,6 +2518,24 @@ int init_dummy_netdev(struct net_device *dev);
 
 DECLARE_PER_CPU(int, xmit_recursion);
 #define XMIT_RECURSION_LIMIT	10
+
+/* Reuse Perf's existing xmit_recursion, rather than introducing a second
+ * per-cpu counter from the newer Agate softnet_data layout.
+ */
+static inline bool dev_xmit_recursion(void)
+{
+	return unlikely(__this_cpu_read(xmit_recursion) > XMIT_RECURSION_LIMIT);
+}
+
+static inline void dev_xmit_recursion_inc(void)
+{
+	__this_cpu_inc(xmit_recursion);
+}
+
+static inline void dev_xmit_recursion_dec(void)
+{
+	__this_cpu_dec(xmit_recursion);
+}
 
 static inline int dev_recursion_level(void)
 {
@@ -3333,6 +3370,7 @@ int do_xdp_generic(struct bpf_prog *xdp_prog, struct sk_buff *skb);
 int netif_rx(struct sk_buff *skb);
 int netif_rx_ni(struct sk_buff *skb);
 int netif_receive_skb(struct sk_buff *skb);
+int netif_receive_skb_core(struct sk_buff *skb);
 gro_result_t napi_gro_receive(struct napi_struct *napi, struct sk_buff *skb);
 void napi_gro_flush(struct napi_struct *napi, bool flush_old);
 struct sk_buff *napi_get_frags(struct napi_struct *napi);
@@ -4282,6 +4320,16 @@ static inline bool netif_is_l3_master(const struct net_device *dev)
 static inline bool netif_is_l3_slave(const struct net_device *dev)
 {
 	return dev->priv_flags & IFF_L3MDEV_SLAVE;
+}
+
+/* L3 slave ifindex for BPF UDP lookup helpers (Agate-compatible ABI). */
+static inline int dev_sdif(const struct net_device *dev)
+{
+#ifdef CONFIG_NET_L3_MASTER_DEV
+	if (netif_is_l3_slave(dev))
+		return dev->ifindex;
+#endif
+	return 0;
 }
 
 static inline bool netif_is_bridge_master(const struct net_device *dev)
