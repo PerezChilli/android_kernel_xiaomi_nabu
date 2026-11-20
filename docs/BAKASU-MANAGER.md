@@ -1,6 +1,6 @@
-# BakaSU Android manager compatibility — Xiaomi Pad 5 (nabu)
+# BakaSU Manager compatibility — Xiaomi Pad 5 (nabu)
 
-Applies to source branches `public/bk` (BakaSU) and `public/bks` (BakaSU + SUSFS 2.3.0).
+Applies to the [`bk`](https://github.com/PerezChilli/android_kernel_xiaomi_nabu/tree/bk) (BakaSU) and [`bks`](https://github.com/PerezChilli/android_kernel_xiaomi_nabu/tree/bks) (BakaSU + SUSFS 2.3.0) branches.
 
 | Item | Required / matched value |
 | --- | --- |
@@ -11,10 +11,8 @@ Applies to source branches `public/bk` (BakaSU) and `public/bks` (BakaSU + SUSFS
 | Bundled kernel-side BakaSU source | Revision `7b65bde` (`7b65bde0710b5e7c6f755545cb15a4abd417f3a8`) |
 | Kernel-side version string | `v4.2.0-rc3-7b65bde-offline` |
 | KernelSU API/UAPI | **6** |
-| No-root branch | No Android manager required or useful |
+| `main` (no-root) branch | No Android root manager required or useful |
 
-The kernel-side values are defined in `KernelSU/kernel/Kbuild` and were corroborated against the recorded R20 kernel logs. Use the matching **BakaSU** manager, rather than a generic KernelSU APK; other releases are not validated for this reconstruction.
+The kernel-side values are defined in `KernelSU/kernel/Kbuild` and were corroborated against recorded kernel logs for previously working builds. Use the matching **BakaSU** manager instead of a generic KernelSU APK; other releases are not validated for this reconstruction.
 
-The APK is intentionally **not** included in the public source tree. Obtain the exact matching, officially published BakaSU APK from a trusted upstream release and check its authenticity. This repository's source-branch compatibility guidance does **not** itself verify an external APK's signature or availability.
-
-This note specifies the Android management application only. It does not change kernel build steps, root features, or SUSFS behavior.
+The APK is intentionally **not** included in the source tree. Obtain the matching official BakaSU APK from a trusted upstream source and verify its authenticity. This note does not verify availability or signatures of external APK files, nor does it certify R22 runtime behavior.
