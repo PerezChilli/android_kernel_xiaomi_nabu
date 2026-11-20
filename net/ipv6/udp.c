@@ -872,22 +872,29 @@ int __udp6_lib_rcv(struct sk_buff *skb, struct udp_table *udptable,
 		goto csum_error;
 
 	/* Check if the socket is already available, e.g. due to early demux */
-	sk = skb_steal_sock(skb);
-	if (sk) {
-		struct dst_entry *dst = skb_dst(skb);
-		int ret;
+	/* The prefetched socket can be RCU-owned, not refcounted. */
+	{
+		bool refcounted;
 
-		if (unlikely(sk->sk_rx_dst != dst))
-			udp6_sk_rx_dst_set(sk, dst);
+		sk = skb_steal_sock(skb, &refcounted);
+		if (sk) {
+			struct dst_entry *dst = skb_dst(skb);
+			int ret;
 
-		if (!uh->check && !udp_sk(sk)->no_check6_rx) {
-			sock_put(sk);
-			goto report_csum_error;
+			if (unlikely(sk->sk_rx_dst != dst))
+				udp6_sk_rx_dst_set(sk, dst);
+
+			if (!uh->check && !udp_sk(sk)->no_check6_rx) {
+				if (refcounted)
+					sock_put(sk);
+				goto report_csum_error;
+			}
+
+			ret = udp6_unicast_rcv_skb(sk, skb, uh);
+			if (refcounted)
+				sock_put(sk);
+			return ret;
 		}
-
-		ret = udp6_unicast_rcv_skb(sk, skb, uh);
-		sock_put(sk);
-		return ret;
 	}
 
 	/*

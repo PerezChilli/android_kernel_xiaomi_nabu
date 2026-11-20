@@ -2,3 +2,5 @@
 
 config TRACE_GPU_MEM
 	bool
+	# Preserve the enabled setting recorded in all three original boot configs.
+	default y if QCOM_KGSL

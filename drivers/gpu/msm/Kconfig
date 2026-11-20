@@ -9,11 +9,32 @@ config QCOM_KGSL
 	select DEVFREQ_GOV_PERFORMANCE
 	select DEVFREQ_GOV_QCOM_ADRENO_TZ
 	select DEVFREQ_GOV_QCOM_GPUBW_MON
+	select TRACE_GPU_MEM
 	---help---
 	  3D graphics driver for the Adreno family of GPUs from QTI.
 	  Required to use hardware accelerated OpenGL, compute and Vulkan
 	  on QTI targets. This includes power management, memory management,
 	  and scheduling for the Adreno GPUs.
+
+config QCOM_KGSL_A640_CTX_PROFILE_TEST
+	bool "Experimental A640 raw context counter trace (unsafe for production)"
+	depends on QCOM_KGSL
+	default n
+	help
+	  Experimental Adreno 640 context counter register snapshots via
+	  CP_REG_TO_MEM. Emits raw counters only; does not implement Android
+	  gpu_work_period. Requires testing on target hardware and firmware.
+
+config QCOM_KGSL_GPU_WORK_PERIOD
+	bool "Android GPU work period from A640 hardware context ticks (experimental)"
+	depends on QCOM_KGSL_A640_CTX_PROFILE_TEST
+	default n
+	help
+	  Direct Android GpuWork integration, emitting power:gpu_work_period
+	  with CLOCK_MONOTONIC_RAW and per-UID periodic aggregation from
+	  validated CP_ALWAYS_ON_CONTEXT active tick differences. Uses GPU
+	  ID 1 and the 19.2 MHz always-on context clock. Do not use without
+	  testing BPF attach, UID accounting and system stability on A640.
 
 config QCOM_ADRENO_DEFAULT_GOVERNOR
 	string "devfreq governor for the adreno core"

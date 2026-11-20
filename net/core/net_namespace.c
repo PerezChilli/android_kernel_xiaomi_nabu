@@ -133,6 +133,16 @@ static void ops_free(const struct pernet_operations *ops, struct net *net)
 	}
 }
 
+static void ops_pre_exit_list(const struct pernet_operations *ops,
+                              struct list_head *net_exit_list)
+{
+        struct net *net;
+
+        if (ops->pre_exit)
+                list_for_each_entry(net, net_exit_list, exit_list)
+                        ops->pre_exit(net);
+}
+
 static void ops_exit_list(const struct pernet_operations *ops,
 			  struct list_head *net_exit_list)
 {
@@ -276,6 +286,12 @@ struct net *get_net_ns_by_id(struct net *net, int id)
 /*
  * setup_net runs the initializers for the network namespace object.
  */
+/* Nonzero, lifetime-unique IDs for BPF get_netns_cookie().  Keeping this
+ * counter separate from the per-net socket cookie generator preserves the
+ * semantics of sock_gen_cookie() in Perf 4.14.
+ */
+static atomic64_t perf_netns_cookie_seq = ATOMIC64_INIT(0);
+
 static __net_init int setup_net(struct net *net, struct user_namespace *user_ns)
 {
 	/* Must be called with net_mutex held */
@@ -286,6 +302,8 @@ static __net_init int setup_net(struct net *net, struct user_namespace *user_ns)
 	atomic_set(&net->count, 1);
 	refcount_set(&net->passive, 1);
 	get_random_bytes(&net->hash_mix, sizeof(u32));
+	atomic64_set(&net->net_cookie,
+		atomic64_inc_return(&perf_netns_cookie_seq));
 	net->dev_base_seq = 1;
 	net->user_ns = user_ns;
 	idr_init(&net->netns_ids);
@@ -471,6 +489,10 @@ static void cleanup_net(struct work_struct *work)
 
 	}
 	rtnl_unlock();
+
+	/* Unpublish BPF netns links before the RCU grace period. */
+	list_for_each_entry_reverse(ops, &pernet_list, list)
+		ops_pre_exit_list(ops, &net_exit_list);
 
 	/*
 	 * Another CPU might be rcu-iterating the list, wait for it.

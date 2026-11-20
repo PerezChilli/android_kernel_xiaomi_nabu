@@ -25,6 +25,14 @@
 #include <linux/slab.h>
 #include <linux/filter.h>
 #include <linux/compiler.h>
+#include <linux/printk.h>
+#include <linux/security.h>
+#include <linux/user_namespace.h>
+
+#ifdef CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS
+#include <linux/susfs_def.h>
+#include <linux/string.h>
+#endif
 
 #include <asm/sections.h>
 
@@ -627,6 +635,44 @@ static void s_stop(struct seq_file *m, void *p)
 {
 }
 
+#ifdef CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS
+/*
+ * The original SUSFS prefix rules do not cover BakaSU's infix symbols
+ * (setup_ksu_cred, anon_ksu_ioctl) or init symbols such as
+ * __initcall_kernelsu_init6.  Restrict the infix matches to distinctive
+ * identifiers: a broad "ksu" substring would also hide checksum symbols.
+ * Use this for built-in and module symbols alike.
+ */
+static bool susfs_kallsyms_should_hide(const char *name)
+{
+	return susfs_starts_with(name, "ksu_") ||
+		susfs_starts_with(name, "__ksu_") ||
+		susfs_starts_with(name, "susfs_") ||
+		susfs_starts_with(name, "ksud") ||
+		susfs_starts_with(name, "is_ksu_") ||
+		susfs_starts_with(name, "is_manager_") ||
+		susfs_starts_with(name, "escape_to_") ||
+		susfs_starts_with(name, "setup_selinux") ||
+		susfs_starts_with(name, "track_throne") ||
+		susfs_starts_with(name, "on_post_fs_data") ||
+		susfs_starts_with(name, "try_umount") ||
+		susfs_starts_with(name, "kernelsu") ||
+		susfs_starts_with(name, "__initcall__kmod_kernelsu") ||
+		susfs_starts_with(name, "apply_kernelsu") ||
+		susfs_starts_with(name, "handle_sepolicy") ||
+		susfs_starts_with(name, "getenforce") ||
+		susfs_starts_with(name, "setenforce") ||
+		susfs_starts_with(name, "is_zygote") ||
+		strstr(name, "_ksu_") ||
+		strstr(name, "kernelsu") ||
+		strstr(name, "KernelSU") ||
+		strstr(name, "KERNEL_SU_") ||
+		strstr(name, "susfs") ||
+		strstr(name, "ksud") ||
+		strstr(name, "BakaSU");
+}
+#endif
+
 static int s_show(struct seq_file *m, void *p)
 {
 	struct kallsym_iter *iter = m->private;
@@ -634,6 +680,11 @@ static int s_show(struct seq_file *m, void *p)
 	/* Some debugging symbols have no name.  Ignore them. */
 	if (!iter->name[0])
 		return 0;
+
+#ifdef CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS
+	if (susfs_kallsyms_should_hide(iter->name))
+		return 0;
+#endif
 
 	if (iter->module_name[0]) {
 		char type;
@@ -646,9 +697,10 @@ static int s_show(struct seq_file *m, void *p)
 					tolower(iter->type);
 		seq_printf(m, "%pK %c %s\t[%s]\n", (void *)iter->value,
 			   type, iter->name, iter->module_name);
-	} else
+	} else {
 		seq_printf(m, "%pK %c %s\n", (void *)iter->value,
 			   iter->type, iter->name);
+	}
 	return 0;
 }
 
@@ -658,6 +710,32 @@ static const struct seq_operations kallsyms_op = {
 	.stop = s_stop,
 	.show = s_show
 };
+
+static bool kallsyms_for_perf(void)
+{
+#ifdef CONFIG_PERF_EVENTS
+	extern int sysctl_perf_event_paranoid;
+	if (sysctl_perf_event_paranoid <= 1)
+		return true;
+#endif
+	return false;
+}
+
+bool kallsyms_show_value(const struct cred *cred)
+{
+	switch (kptr_restrict) {
+	case 0:
+		if (kallsyms_for_perf())
+			return true;
+		/* fall through */
+	case 1:
+		if (!security_capable(cred, &init_user_ns, CAP_SYSLOG))
+			return true;
+		/* fall through */
+	default:
+		return false;
+	}
+}
 
 static int kallsyms_open(struct inode *inode, struct file *file)
 {

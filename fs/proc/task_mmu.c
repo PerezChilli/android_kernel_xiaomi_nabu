@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0
 #include <linux/mm.h>
+#ifdef CONFIG_KSU_SUSFS_SUS_MAP
+#include <linux/susfs_def.h>
+#endif
 #include <linux/vmacache.h>
 #include <linux/hugetlb.h>
 #include <linux/huge_mm.h>
@@ -422,6 +425,16 @@ done:
 
 static int show_map(struct seq_file *m, void *v, int is_pid)
 {
+#ifdef CONFIG_KSU_SUSFS_SUS_MAP
+	struct vm_area_struct *vma = v;
+
+	/* Match show_smap(): omit marked mappings without skipping the VMA. */
+	if (vma->vm_file &&
+	    SUSFS_IS_INODE_SUS_MAP(file_inode(vma->vm_file))) {
+		m_cache_vma(m, vma);
+		return SEQ_SKIP;
+	}
+#endif
 	show_map_vma(m, v, is_pid);
 	m_cache_vma(m, v);
 	return 0;
@@ -861,6 +874,13 @@ static int show_smap(struct seq_file *m, void *v, int is_pid)
 	}
 #endif
 	/* mmap_sem is held in m_start */
+#ifdef CONFIG_KSU_SUSFS_SUS_MAP
+	/* Keep the Moon rollup iterator and accounting model intact. */
+	if (vma->vm_file && SUSFS_IS_INODE_SUS_MAP(file_inode(vma->vm_file))) {
+		m_cache_vma(m, vma);
+		return SEQ_SKIP;
+	}
+#endif
 	walk_page_vma(vma, &smaps_walk);
 
 	if (!rollup_mode) {

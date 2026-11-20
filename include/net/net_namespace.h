@@ -13,6 +13,7 @@
 
 #include <net/flow.h>
 #include <net/netns/core.h>
+#include <net/netns/bpf.h>
 #include <net/netns/mib.h>
 #include <net/netns/unix.h>
 #include <net/netns/packet.h>
@@ -58,6 +59,8 @@ struct net {
 
 	u32			hash_mix;
 	atomic64_t		cookie_gen;
+	/* Stable unique identity used by BPF get_netns_cookie(). */
+	atomic64_t		net_cookie;
 
 	struct list_head	list;		/* list of network namespaces */
 	struct list_head	cleanup_list;	/* namespaces on death row */
@@ -136,6 +139,9 @@ struct net {
 	struct sk_buff_head	wext_nlevents;
 #endif
 	struct net_generic __rcu	*gen;
+
+	/* Network namespace BPF programs and links. */
+	struct netns_bpf bpf;
 
 	/* Note : following structs are cache line aligned */
 #ifdef CONFIG_XFRM
@@ -311,6 +317,8 @@ struct net *get_net_ns_by_id(struct net *net, int id);
 struct pernet_operations {
 	struct list_head list;
 	int (*init)(struct net *net);
+	/* Detach listeners before synchronize_rcu() and normal teardown. */
+	void (*pre_exit)(struct net *net);
 	void (*exit)(struct net *net);
 	void (*exit_batch)(struct list_head *net_exit_list);
 	unsigned int *id;

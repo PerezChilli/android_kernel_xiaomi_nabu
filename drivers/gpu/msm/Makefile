@@ -17,6 +17,7 @@ msm_kgsl_core-y = \
 	kgsl_rgmu.o \
 	kgsl_hfi.o
 
+msm_kgsl_core-$(CONFIG_QCOM_KGSL_GPU_WORK_PERIOD) += kgsl_gpu_work_period.o
 msm_kgsl_core-$(CONFIG_QCOM_KGSL_IOMMU) += kgsl_iommu.o
 msm_kgsl_core-$(CONFIG_DEBUG_FS) += kgsl_debugfs.o
 msm_kgsl_core-$(CONFIG_SYNC_FILE) += kgsl_sync.o

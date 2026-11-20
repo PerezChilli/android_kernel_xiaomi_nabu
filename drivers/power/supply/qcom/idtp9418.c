@@ -9,7 +9,7 @@
 #include <linux/sysfs.h>
 #include <asm/unaligned.h>
 /*add for sdm845 request*/
-#include <idtp9418.h>
+#include "idtp9418.h"
 #include <linux/regmap.h>
 #include <linux/spinlock.h>
 #include <linux/of_gpio.h>
@@ -5063,6 +5063,7 @@ static void idt_get_reverse_soc(struct idtp9220_device_info *di)
 	if (pen_soc_count == SOC_100_RETRY) {
 		dev_info(di->dev, "[reverse] soc is 100 exceed 6 times, disable reverse chg!\n");
 		idtp9220_set_reverse_enable(di, false);
+		di->reverse_pen_soc = 100;
 		di->is_reverse_mode = 0;
 		di->is_reverse_chg = 2;
 		pen_soc_count = 0;
@@ -5113,7 +5114,6 @@ static void idt_reverse_chg_work(struct work_struct *work)
 		idt_get_reverse_soc(di);
 	} else {
 		dev_info(di->dev, "reverse chg closed, return\n");
-		di->reverse_pen_soc = 255;
 		di->reverse_vout = 0;
 		di->reverse_iout = 0;
 		return;
@@ -5345,7 +5345,7 @@ static int idtp9220_get_prop(struct power_supply *psy,
 		if (di->is_reverse_mode || di->is_boost_mode)
 			val->intval = di->reverse_pen_soc;
 		else
-			val->intval = 50;
+			val->intval = di->reverse_pen_soc;
 		break;
 	case POWER_SUPPLY_PROP_REVERSE_VOUT:
 		if (di->is_reverse_mode || di->is_boost_mode)
@@ -5751,6 +5751,7 @@ static int idtp9220_probe(struct i2c_client *client,
 	if (gpio_is_valid(di->dt_props.hall3_gpio)) {
 		hall3_val = gpio_get_value(di->dt_props.hall3_gpio);
 		if (!hall3_val) {
+			di->hall3_online = 1;
 			dev_info(di->dev, "pen online, start reverse charge\n");
 			schedule_delayed_work(&di->hall3_irq_work, msecs_to_jiffies(5000));
 		}
@@ -5761,6 +5762,7 @@ static int idtp9220_probe(struct i2c_client *client,
 	if (gpio_is_valid(di->dt_props.hall4_gpio)) {
 		hall4_val = gpio_get_value(di->dt_props.hall4_gpio);
 		if (!hall4_val) {
+			di->hall4_online = 1;
 			dev_info(di->dev, "pen online, start reverse charge\n");
 			schedule_delayed_work(&di->hall4_irq_work, msecs_to_jiffies(5000));
 		}

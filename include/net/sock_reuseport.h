@@ -5,19 +5,26 @@
 #include <linux/filter.h>
 #include <linux/skbuff.h>
 #include <linux/types.h>
+#include <linux/spinlock.h>
 #include <net/sock.h>
+
+/* Serialize BPF reuseport array updates with socket group changes. */
+extern spinlock_t reuseport_lock;
 
 struct sock_reuseport {
 	struct rcu_head		rcu;
 
 	u16			max_socks;	/* length of socks */
 	u16			num_socks;	/* elements in socks */
+	u32			reuseport_id;
+	bool			bind_inany;
 	struct bpf_prog __rcu	*prog;		/* optional BPF sock selector */
 	struct sock		*socks[0];	/* array of sock pointers */
 };
 
-extern int reuseport_alloc(struct sock *sk);
-extern int reuseport_add_sock(struct sock *sk, struct sock *sk2);
+extern int reuseport_alloc(struct sock *sk, bool bind_inany);
+extern int reuseport_add_sock(struct sock *sk, struct sock *sk2,
+				    bool bind_inany);
 extern void reuseport_detach_sock(struct sock *sk);
 extern struct sock *reuseport_select_sock(struct sock *sk,
 					  u32 hash,

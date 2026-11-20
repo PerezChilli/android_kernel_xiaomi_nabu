@@ -29,6 +29,8 @@
 #include <linux/mman.h>
 #include <linux/sort.h>
 #include <linux/security.h>
+#include <linux/cred.h>
+#include <linux/uidgid.h>
 #include <linux/compat.h>
 #include <linux/ctype.h>
 #include <linux/mm.h>
@@ -47,6 +49,37 @@
 #include "kgsl_sync.h"
 #include "kgsl_compat.h"
 #include "kgsl_pool.h"
+
+#ifdef CONFIG_TRACE_GPU_MEM
+#include <trace/events/gpu_mem.h>
+
+/* Accounted GPU virtual memory, using existing KGSL per-process counters.
+ * This is not a replacement for a full driver-wide physical allocation census.
+ */
+static atomic64_t kgsl_gpu_mem_accounted_total = ATOMIC64_INIT(0);
+
+static void kgsl_trace_accounted_memory(struct kgsl_process_private *priv,
+                                      s64 delta)
+{
+    u64 process_total = 0;
+    s64 global_total;
+    int type;
+
+    if (!priv)
+        return;
+
+    global_total = atomic64_add_return(delta,
+                                     &kgsl_gpu_mem_accounted_total);
+    for (type = 0; type < KGSL_MEM_ENTRY_MAX; type++)
+        process_total += atomic64_read(&priv->stats[type].cur);
+
+    trace_gpu_mem_total(0, priv->pid, process_total);
+    trace_gpu_mem_total(0, 0, global_total > 0 ? global_total : 0);
+}
+#else
+static inline void kgsl_trace_accounted_memory(struct kgsl_process_private *priv,
+                                               s64 delta) {}
+#endif
 
 #undef MODULE_PARAM_PREFIX
 #define MODULE_PARAM_PREFIX "kgsl."
@@ -371,9 +404,12 @@ kgsl_mem_entry_destroy(struct kref *kref)
 	/* pull out the memtype before the flags get cleared */
 	memtype = kgsl_memdesc_usermem_type(&entry->memdesc);
 
-	if (!(entry->memdesc.flags & KGSL_MEMFLAGS_SPARSE_VIRT))
+	if (!(entry->memdesc.flags & KGSL_MEMFLAGS_SPARSE_VIRT)) {
 		kgsl_process_sub_stats(entry->priv, memtype,
 			entry->memdesc.size);
+		kgsl_trace_accounted_memory(entry->priv,
+			-(s64)entry->memdesc.size);
+	}
 
 	/* Detach from process list */
 	kgsl_mem_entry_detach_process(entry);
@@ -1085,6 +1121,8 @@ static struct kgsl_process_private *kgsl_process_private_new(
 	kref_init(&private->refcount);
 
 	private->pid = tgid;
+	/* Record the opener's UID once; do not resolve a PID at retire time. */
+	private->uid = __kuid_val(current_uid());
 	get_task_comm(private->comm, current->group_leader);
 
 	spin_lock_init(&private->mem_lock);
@@ -2723,6 +2761,7 @@ long kgsl_ioctl_gpuobj_import(struct kgsl_device_private *dev_priv,
 	kgsl_process_add_stats(private,
 		kgsl_memdesc_usermem_type(&entry->memdesc),
 		entry->memdesc.size);
+	kgsl_trace_accounted_memory(private, (s64)entry->memdesc.size);
 
 	trace_kgsl_mem_map(entry, fd);
 
@@ -3037,6 +3076,7 @@ long kgsl_ioctl_map_user_mem(struct kgsl_device_private *dev_priv,
 
 	kgsl_process_add_stats(private,
 			kgsl_memdesc_usermem_type(&entry->memdesc), param->len);
+	kgsl_trace_accounted_memory(private, (s64)param->len);
 
 	trace_kgsl_mem_map(entry, param->fd);
 
@@ -3425,6 +3465,7 @@ struct kgsl_mem_entry *gpumem_alloc_entry(
 	kgsl_process_add_stats(private,
 			kgsl_memdesc_usermem_type(&entry->memdesc),
 			entry->memdesc.size);
+	kgsl_trace_accounted_memory(private, (s64)entry->memdesc.size);
 	trace_kgsl_mem_alloc(entry);
 
 	kgsl_mem_entry_commit_process(entry);
@@ -3655,6 +3696,7 @@ long kgsl_ioctl_sparse_phys_alloc(struct kgsl_device_private *dev_priv,
 	kgsl_process_add_stats(process,
 			kgsl_memdesc_usermem_type(&entry->memdesc),
 			entry->memdesc.size);
+	kgsl_trace_accounted_memory(process, (s64)entry->memdesc.size);
 
 	trace_sparse_phys_alloc(entry->id, param->size, param->pagesize);
 	kgsl_mem_entry_commit_process(entry);

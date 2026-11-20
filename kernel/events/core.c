@@ -413,6 +413,7 @@ static atomic_t nr_namespaces_events __read_mostly;
 static atomic_t nr_task_events __read_mostly;
 static atomic_t nr_freq_events __read_mostly;
 static atomic_t nr_switch_events __read_mostly;
+static atomic_t nr_bpf_events __read_mostly;
 
 static LIST_HEAD(pmus);
 static DEFINE_MUTEX(pmus_lock);
@@ -4154,7 +4155,7 @@ static bool is_sb_event(struct perf_event *event)
 	if (attr->mmap || attr->mmap_data || attr->mmap2 ||
 	    attr->comm || attr->comm_exec ||
 	    attr->task ||
-	    attr->context_switch)
+	    attr->context_switch || attr->bpf_event)
 		return true;
 	return false;
 }
@@ -4213,6 +4214,8 @@ static void unaccount_event(struct perf_event *event)
 		atomic_dec(&nr_namespaces_events);
 	if (event->attr.task)
 		atomic_dec(&nr_task_events);
+	if (event->attr.bpf_event)
+		atomic_dec(&nr_bpf_events);
 	if (event->attr.freq)
 		unaccount_freq_event();
 	if (event->attr.context_switch) {
@@ -7650,6 +7653,66 @@ static void perf_log_throttle(struct perf_event *event, int enable)
 	perf_output_end(&handle);
 }
 
+/* BPF program load/unload sideband records for perf subscribers.
+ * No JIT ksymbol notifications yet: PERF_RECORD_BPF_EVENT is independent.
+ */
+struct perf_bpf_record {
+	struct {
+		struct perf_event_header header;
+		u16 type;
+		u16 flags;
+		u32 id;
+		u8 tag[BPF_TAG_SIZE];
+	} rec;
+};
+
+static void perf_event_bpf_output(struct perf_event *event, void *data)
+{
+	struct perf_bpf_record *record = data;
+	struct perf_output_handle handle;
+	struct perf_sample_data sample;
+	int ret;
+
+	if (!event->attr.bpf_event)
+		return;
+
+	perf_event_header__init_id(&record->rec.header, &sample, event);
+	ret = perf_output_begin(&handle, event, record->rec.header.size);
+	if (ret)
+		return;
+
+	perf_output_put(&handle, record->rec);
+	perf_event__output_id_sample(event, &handle, &sample);
+	perf_output_end(&handle);
+}
+
+void perf_event_bpf_event(struct bpf_prog *prog,
+			  enum perf_bpf_event_type type, u16 flags)
+{
+	struct perf_bpf_record record;
+
+	if (type != PERF_BPF_EVENT_PROG_LOAD &&
+	    type != PERF_BPF_EVENT_PROG_UNLOAD)
+		return;
+	if (!atomic_read(&nr_bpf_events))
+		return;
+
+	record = (struct perf_bpf_record) {
+		.rec = {
+			.header = {
+				.type = PERF_RECORD_BPF_EVENT,
+				.size = sizeof(record.rec),
+			},
+			.type = type,
+			.flags = flags,
+			.id = prog->aux->id,
+		},
+	};
+	BUILD_BUG_ON(BPF_TAG_SIZE % sizeof(u64));
+	memcpy(record.rec.tag, prog->tag, BPF_TAG_SIZE);
+	perf_iterate_sb(perf_event_bpf_output, &record, NULL);
+}
+
 void perf_event_itrace_started(struct perf_event *event)
 {
 	event->attach_state |= PERF_ATTACH_ITRACE;
@@ -9704,6 +9767,8 @@ static void account_event(struct perf_event *event)
 		atomic_inc(&nr_namespaces_events);
 	if (event->attr.task)
 		atomic_inc(&nr_task_events);
+	if (event->attr.bpf_event)
+		atomic_inc(&nr_bpf_events);
 	if (event->attr.freq)
 		account_freq_event();
 	if (event->attr.context_switch) {
@@ -9945,7 +10010,7 @@ perf_event_alloc(struct perf_event_attr *attr, int cpu,
 		context = parent_event->overflow_handler_context;
 #if defined(CONFIG_BPF_SYSCALL) && defined(CONFIG_EVENT_TRACING)
 		if (overflow_handler == bpf_overflow_handler) {
-			struct bpf_prog *prog = bpf_prog_inc(parent_event->prog);
+			struct bpf_prog *prog = bpf_prog_inc_not_zero(parent_event->prog);
 
 			if (IS_ERR(prog)) {
 				err = PTR_ERR(prog);
@@ -11252,6 +11317,14 @@ struct file *perf_event_get(unsigned int fd)
 	}
 
 	return file;
+}
+
+/* Backport the typed accessor; reject unrelated file descriptors. */
+const struct perf_event *perf_get_event(struct file *file)
+{
+    if (file->f_op != &perf_fops)
+        return ERR_PTR(-EINVAL);
+    return file->private_data;
 }
 
 const struct perf_event_attr *perf_event_attrs(struct perf_event *event)

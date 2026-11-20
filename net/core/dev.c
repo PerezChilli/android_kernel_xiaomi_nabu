@@ -145,6 +145,7 @@
 #include <linux/crash_dump.h>
 #include <linux/sctp.h>
 #include <net/udp_tunnel.h>
+#include <net/xdp.h> /* Full XDP buffer layout used by generic XDP. */
 #include <linux/tcp.h>
 #include <net/tcp.h>
 
@@ -3917,51 +3918,80 @@ drop:
 	return NET_RX_DROP;
 }
 
+/* The generic XDP buffer lives through program execution and its synchronous
+ * redirect processing.  All callers in do_xdp_generic() pass the same buffer.
+ * Real per-device RX queue registration is a separate backport prerequisite
+ * for complete XDP (particularly zero-copy / native XDP).
+ */
 static u32 netif_receive_generic_xdp(struct sk_buff *skb,
-				     struct bpf_prog *xdp_prog)
+                                     struct xdp_buff *xdp,
+                                     struct xdp_rxq_info *rxq,
+                                     struct bpf_prog *xdp_prog)
 {
-	struct xdp_buff xdp;
-	u32 act = XDP_DROP;
-	void *orig_data;
+	void *orig_data, *orig_data_end;
+	u32 act = XDP_DROP, mac_len, metalen;
 	int hlen, off;
-	u32 mac_len;
 
-	/* Reinjected packets coming from act_mirred or similar should
-	 * not get XDP generic processing.
-	 */
+	/* Reinjected packets do not run the generic XDP program again. */
 	if (skb_cloned(skb))
 		return XDP_PASS;
 
-	if (skb_linearize(skb))
-		goto do_drop;
+	/* Required for xdp_adjust_head() and to present a linear XDP packet. */
+	if (skb_is_nonlinear(skb) || skb_headroom(skb) < XDP_PACKET_HEADROOM) {
+		int hroom = XDP_PACKET_HEADROOM - skb_headroom(skb);
+		int troom = skb->tail + skb->data_len - skb->end;
 
-	/* The XDP program wants to see the packet starting at the MAC
-	 * header.
-	 */
+		if (pskb_expand_head(skb,
+				     hroom > 0 ? ALIGN(hroom, NET_SKB_PAD) : 0,
+				     troom > 0 ? troom + 128 : 0, GFP_ATOMIC))
+			goto do_drop;
+		/* Even if existing tailroom fits, the XDP view must be linear. */
+		if (skb_is_nonlinear(skb) && __skb_linearize(skb))
+			goto do_drop;
+	}
+
 	mac_len = skb->data - skb_mac_header(skb);
 	hlen = skb_headlen(skb) + mac_len;
-	xdp.data = skb->data - mac_len;
-	xdp.data_end = xdp.data + hlen;
-	xdp.data_hard_start = skb->data - skb_headroom(skb);
-	orig_data = xdp.data;
+	xdp->data = skb->data - mac_len;
+	xdp->data_meta = xdp->data;
+	xdp->data_end = xdp->data + hlen;
+	xdp->data_hard_start = skb->data - skb_headroom(skb);
+	/* skb_end_pointer points to skb_shared_info; xdp_data_hard_end
+	 * must end at that position and must never overlap it.
+	 */
+	xdp->frame_sz = skb_end_offset(skb) +
+		SKB_DATA_ALIGN(sizeof(struct skb_shared_info));
+	xdp->rxq = rxq;
+	xdp->txq = NULL;
+	orig_data = xdp->data;
+	orig_data_end = xdp->data_end;
 
-	act = bpf_prog_run_xdp(xdp_prog, &xdp);
+	act = bpf_prog_run_xdp(xdp_prog, xdp);
 
-	off = xdp.data - orig_data;
+	off = xdp->data - orig_data;
 	if (off > 0)
 		__skb_pull(skb, off);
 	else if (off < 0)
 		__skb_push(skb, -off);
 	skb->mac_header += off;
 
+	/* Account for changes to packet tail made by bpf_xdp_adjust_tail(). */
+	off = orig_data_end - xdp->data_end;
+	if (off) {
+		skb_set_tail_pointer(skb, xdp->data_end - xdp->data);
+		skb->len -= off;
+	}
+
 	switch (act) {
 	case XDP_REDIRECT:
 	case XDP_TX:
 		__skb_push(skb, mac_len);
-		/* fall through */
-	case XDP_PASS:
 		break;
-
+	case XDP_PASS:
+		metalen = xdp->data - xdp->data_meta;
+		if (metalen)
+			skb_metadata_set(skb, metalen);
+		break;
 	default:
 		bpf_warn_invalid_xdp_action(act);
 		/* fall through */
@@ -3973,7 +4003,6 @@ static u32 netif_receive_generic_xdp(struct sk_buff *skb,
 		kfree_skb(skb);
 		break;
 	}
-
 	return act;
 }
 
@@ -4008,17 +4037,31 @@ static struct static_key generic_xdp_needed __read_mostly;
 int do_xdp_generic(struct bpf_prog *xdp_prog, struct sk_buff *skb)
 {
 	if (xdp_prog) {
-		u32 act = netif_receive_generic_xdp(skb, xdp_prog);
+		struct xdp_rxq_info rxq = {
+			.dev = skb->dev,
+			.mem.type = MEM_TYPE_PAGE_SHARED,
+		};
+		struct xdp_buff xdp = { 0 };
+		u32 act;
 		int err;
 
+		/* Match the RX queue reported by the skb if it is valid. */
+		if (skb_rx_queue_recorded(skb)) {
+			u16 index = skb_get_rx_queue(skb);
+
+			if (index < skb->dev->real_num_rx_queues)
+				rxq.queue_index = index;
+		}
+		act = netif_receive_generic_xdp(skb, &xdp, &rxq, xdp_prog);
 		if (act != XDP_PASS) {
 			switch (act) {
 			case XDP_REDIRECT:
 				err = xdp_do_generic_redirect(skb->dev, skb,
-							      xdp_prog);
+							      &xdp, xdp_prog);
 				if (err)
 					goto out_redir;
-			/* fallthru to submit skb */
+				/* Redirect handler consumes or transmits skb. */
+				break;
 			case XDP_TX:
 				generic_xdp_tx(skb, xdp_prog);
 				break;
@@ -4532,6 +4575,25 @@ out:
 	trace_net_receive_skb_exit(skb);
 	return ret;
 }
+
+/**
+ * netif_receive_skb_core - deliver a cpumap SKB directly to core RX
+ * @skb: buffer whose head has already been constructed by cpumap
+ *
+ * The cpumap worker calls this with BH disabled. Bypass RPS and generic
+ * XDP so a redirected packet is not run through the XDP program again.
+ * The cpumap caller must handle pfmemalloc before calling this function.
+ */
+int netif_receive_skb_core(struct sk_buff *skb)
+{
+	int ret;
+
+	rcu_read_lock();
+	ret = __netif_receive_skb_core(skb, false);
+	rcu_read_unlock();
+	return ret;
+}
+EXPORT_SYMBOL(netif_receive_skb_core);
 
 static int __netif_receive_skb(struct sk_buff *skb)
 {
@@ -8277,6 +8339,8 @@ void free_netdev(struct net_device *dev)
 
 	free_percpu(dev->pcpu_refcnt);
 	dev->pcpu_refcnt = NULL;
+	free_percpu(dev->xdp_bulkq);
+	dev->xdp_bulkq = NULL;
 
 	prog = rcu_dereference_protected(dev->xdp_prog, 1);
 	if (prog) {

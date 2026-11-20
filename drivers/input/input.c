@@ -28,6 +28,7 @@
 #include <linux/device.h>
 #include <linux/mutex.h>
 #include <linux/rcupdate.h>
+#include <linux/timekeeping.h>
 
 #ifdef CONFIG_TOUCH_COUNT_DUMP
 #include <linux/input/touch_common_info.h>
@@ -59,6 +60,107 @@ static const struct input_value input_value_sync = { EV_SYN, SYN_REPORT, 1 };
 static struct touch_event_info *touch_info;
 #endif
 
+
+/*
+ * Recovered diagnostic LAST_TOUCH_EVENTS implementation for nabu-v-oss.
+ * The original Stage28 source of this vendor extension was not preserved.
+ * Collect actual press/release transitions in an IRQ-safe fixed ring, and
+ * expose a root-readable /proc/bus/input/last_touch_events snapshot.
+ * This is functional reconstruction, NOT a claim of binary identity.
+ */
+#ifdef CONFIG_LAST_TOUCH_EVENTS
+#define INPUT_LAST_TOUCH_COUNT 64
+#define INPUT_LAST_TOUCH_NAME_LEN 40
+
+struct input_last_touch_entry {
+	u64 boottime_ns;
+	unsigned int type;
+	unsigned int code;
+	int value;
+	char device[INPUT_LAST_TOUCH_NAME_LEN];
+};
+
+static DEFINE_SPINLOCK(input_last_touch_lock);
+static struct input_last_touch_entry
+	input_last_touch_ring[INPUT_LAST_TOUCH_COUNT];
+static unsigned int input_last_touch_next;
+static unsigned int input_last_touch_count;
+static unsigned long input_last_touch_total;
+
+static void touch_press_release_events_collect(struct input_dev *dev,
+		unsigned int type, unsigned int code, int value)
+{
+	struct input_last_touch_entry *entry;
+	unsigned long flags;
+
+	/* BTN_TOUCH press/release and MT tracking-ID acquire/release. */
+	if (!((type == EV_KEY && code == BTN_TOUCH &&
+	       (value == 0 || value == 1)) ||
+	      (type == EV_ABS && code == ABS_MT_TRACKING_ID)))
+		return;
+
+	spin_lock_irqsave(&input_last_touch_lock, flags);
+	entry = &input_last_touch_ring[input_last_touch_next];
+	entry->boottime_ns = ktime_to_ns(ktime_get_boottime());
+	entry->type = type;
+	entry->code = code;
+	entry->value = value;
+	strlcpy(entry->device, dev->name ? dev->name : "<unnamed>",
+		sizeof(entry->device));
+	input_last_touch_next = (input_last_touch_next + 1) %
+		INPUT_LAST_TOUCH_COUNT;
+	if (input_last_touch_count < INPUT_LAST_TOUCH_COUNT)
+		input_last_touch_count++;
+	input_last_touch_total++;
+	spin_unlock_irqrestore(&input_last_touch_lock, flags);
+}
+
+#if defined(CONFIG_PROC_FS)
+static int input_last_touch_proc_show(struct seq_file *seq, void *unused)
+{
+	struct input_last_touch_entry *snapshot;
+	unsigned long flags;
+	unsigned int count, start, i;
+	unsigned long total;
+
+	snapshot = kcalloc(INPUT_LAST_TOUCH_COUNT, sizeof(*snapshot), GFP_KERNEL);
+	if (!snapshot)
+		return -ENOMEM;
+
+	spin_lock_irqsave(&input_last_touch_lock, flags);
+	count = input_last_touch_count;
+	total = input_last_touch_total;
+	start = (input_last_touch_next + INPUT_LAST_TOUCH_COUNT - count) %
+		INPUT_LAST_TOUCH_COUNT;
+	for (i = 0; i < count; i++)
+		snapshot[i] = input_last_touch_ring[
+			(start + i) % INPUT_LAST_TOUCH_COUNT];
+	spin_unlock_irqrestore(&input_last_touch_lock, flags);
+
+	seq_printf(seq, "total=%lu retained=%u\n", total, count);
+	for (i = 0; i < count; i++)
+		seq_printf(seq, "%llu %s type=%u code=%u value=%d\n",
+			(unsigned long long)snapshot[i].boottime_ns,
+			snapshot[i].device, snapshot[i].type,
+			snapshot[i].code, snapshot[i].value);
+	kfree(snapshot);
+	return 0;
+}
+
+static int input_last_touch_proc_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, input_last_touch_proc_show, NULL);
+}
+
+static const struct file_operations input_last_touch_proc_fops = {
+	.owner = THIS_MODULE,
+	.open = input_last_touch_proc_open,
+	.read = seq_read,
+	.llseek = seq_lseek,
+	.release = single_release,
+};
+#endif /* CONFIG_PROC_FS */
+#endif /* CONFIG_LAST_TOUCH_EVENTS */
 
 static inline int is_event_supported(unsigned int code,
 				     unsigned long *bm, unsigned int max)
@@ -376,10 +478,21 @@ static int input_get_disposition(struct input_dev *dev,
 	return disposition;
 }
 
+#ifdef CONFIG_KSU_SUSFS
+extern struct static_key_true ksu_is_input_hook_enabled;
+extern int ksu_handle_input_handle_event(unsigned int *type, unsigned int *code,
+                                        int *value);
+#endif
+
 static void input_handle_event(struct input_dev *dev,
 			       unsigned int type, unsigned int code, int value)
 {
 	int disposition = input_get_disposition(dev, type, code, &value);
+
+#ifdef CONFIG_KSU_SUSFS
+	if (static_branch_unlikely(&ksu_is_input_hook_enabled))
+		ksu_handle_input_handle_event(&type, &code, &value);
+#endif
 
 	if (disposition != INPUT_IGNORE_EVENT && type != EV_SYN)
 		add_input_randomness(type, code, value);
@@ -1301,7 +1414,17 @@ static int __init input_proc_init(void)
 	if (!entry)
 		goto fail2;
 
+#ifdef CONFIG_LAST_TOUCH_EVENTS
+	entry = proc_create("last_touch_events", 0400, proc_bus_input_dir,
+			    &input_last_touch_proc_fops);
+	if (!entry)
+		goto fail3;
+#endif
 	return 0;
+
+#ifdef CONFIG_LAST_TOUCH_EVENTS
+ fail3:	remove_proc_entry("handlers", proc_bus_input_dir);
+#endif
 
  fail2:	remove_proc_entry("devices", proc_bus_input_dir);
  fail1: remove_proc_entry("bus/input", NULL);
@@ -1310,6 +1433,9 @@ static int __init input_proc_init(void)
 
 static void input_proc_exit(void)
 {
+#ifdef CONFIG_LAST_TOUCH_EVENTS
+	remove_proc_entry("last_touch_events", proc_bus_input_dir);
+#endif
 	remove_proc_entry("devices", proc_bus_input_dir);
 	remove_proc_entry("handlers", proc_bus_input_dir);
 	remove_proc_entry("bus/input", NULL);

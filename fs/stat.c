@@ -17,9 +17,34 @@
 #include <linux/syscalls.h>
 #include <linux/pagemap.h>
 #include <linux/compat.h>
+#ifdef CONFIG_KSU_SUSFS_SUS_KSTAT
+#include <linux/susfs_def.h>
+extern bool susfs_is_inode_sus_kstat(struct inode *inode, bool *out_is_fuse);
+extern void susfs_sus_kstat_spoof_generic_fillattr(struct inode *inode,
+                   struct kstat *stat, u32 result_mask);
+#endif
 
 #include <linux/uaccess.h>
 #include <asm/unistd.h>
+
+#if defined(CONFIG_KSU_MANUAL_HOOK) || defined(CONFIG_KSU_SUSFS)
+/* Common root compatibility hook for filename-based stat syscalls. */
+extern int ksu_handle_stat(int *dfd, const char __user **filename_user,
+                           int *flags);
+#endif
+#ifdef CONFIG_KSU_SUSFS
+/* Linux 4.14's vfs_fstat() calls vfs_statx_fd(). */
+extern void ksu_handle_vfs_fstat(int fd, loff_t *kstat_size_ptr);
+#endif
+#ifdef CONFIG_KSU_MANUAL_HOOK
+extern void ksu_handle_newfstat_ret(unsigned int *fd,
+				    struct stat __user **statbuf_ptr);
+#if defined(__ARCH_WANT_STAT64) || defined(__ARCH_WANT_COMPAT_STAT64)
+extern void ksu_handle_fstat64_ret(unsigned long *fd,
+				   struct stat64 __user **statbuf_ptr);
+#endif
+#endif
+
 
 /**
  * generic_fillattr - Fill in the basic attributes from the inode struct
@@ -70,16 +95,47 @@ int vfs_getattr_nosec(const struct path *path, struct kstat *stat,
 		      u32 request_mask, unsigned int query_flags)
 {
 	struct inode *inode = d_backing_inode(path->dentry);
+#ifdef CONFIG_KSU_SUSFS_SUS_KSTAT
+	/*
+	 * Kernel 4.14 has statx and thus kstat->result_mask, but kstat has no
+	 * mnt_id there, so the STATX_SUS_KSTAT[_FUSE] marker is only needed
+	 * locally to decide whether to spoof the result.
+	 */
+	u32 susfs_result_mask = 0;
+	int err;
+#endif
 
 	memset(stat, 0, sizeof(*stat));
 	stat->result_mask |= STATX_BASIC_STATS;
 	request_mask &= STATX_ALL;
 	query_flags &= KSTAT_QUERY_FLAGS;
-	if (inode->i_op->getattr)
+
+#ifdef CONFIG_KSU_SUSFS_SUS_KSTAT
+	if (susfs_is_current_app_uid()) {
+		bool is_fuse = false;
+
+		if (susfs_is_inode_sus_kstat(inode, &is_fuse))
+			susfs_result_mask = is_fuse ? STATX_SUS_KSTAT_FUSE : STATX_SUS_KSTAT;
+	}
+#endif
+
+	if (inode->i_op->getattr) {
+#ifdef CONFIG_KSU_SUSFS_SUS_KSTAT
+		err = inode->i_op->getattr(path, stat, request_mask, query_flags);
+		if (!err && susfs_result_mask)
+			susfs_sus_kstat_spoof_generic_fillattr(inode, stat, susfs_result_mask);
+		return err;
+#else
 		return inode->i_op->getattr(path, stat, request_mask,
 					    query_flags);
+#endif
+	}
 
 	generic_fillattr(inode, stat);
+#ifdef CONFIG_KSU_SUSFS_SUS_KSTAT
+	if (susfs_result_mask)
+		susfs_sus_kstat_spoof_generic_fillattr(inode, stat, susfs_result_mask);
+#endif
 	return 0;
 }
 EXPORT_SYMBOL(vfs_getattr_nosec);
@@ -142,6 +198,10 @@ int vfs_statx_fd(unsigned int fd, struct kstat *stat,
 	if (f.file) {
 		error = vfs_getattr(&f.file->f_path, stat,
 				    request_mask, query_flags);
+#ifdef CONFIG_KSU_SUSFS
+		if (!error)
+			ksu_handle_vfs_fstat(fd, &stat->size);
+#endif
 		fdput(f);
 	}
 	return error;
@@ -361,6 +421,9 @@ SYSCALL_DEFINE4(newfstatat, int, dfd, const char __user *, filename,
 	struct kstat stat;
 	int error;
 
+#if defined(CONFIG_KSU_MANUAL_HOOK) || defined(CONFIG_KSU_SUSFS)
+	ksu_handle_stat(&dfd, &filename, &flag);
+#endif
 	error = vfs_fstatat(dfd, filename, &stat, flag);
 	if (error)
 		return error;
@@ -376,6 +439,9 @@ SYSCALL_DEFINE2(newfstat, unsigned int, fd, struct stat __user *, statbuf)
 	if (!error)
 		error = cp_new_stat(&stat, statbuf);
 
+#ifdef CONFIG_KSU_MANUAL_HOOK
+	ksu_handle_newfstat_ret(&fd, &statbuf);
+#endif
 	return error;
 }
 
@@ -496,6 +562,9 @@ SYSCALL_DEFINE2(fstat64, unsigned long, fd, struct stat64 __user *, statbuf)
 	if (!error)
 		error = cp_new_stat64(&stat, statbuf);
 
+#ifdef CONFIG_KSU_MANUAL_HOOK
+	ksu_handle_fstat64_ret(&fd, &statbuf);
+#endif
 	return error;
 }
 
@@ -505,6 +574,9 @@ SYSCALL_DEFINE4(fstatat64, int, dfd, const char __user *, filename,
 	struct kstat stat;
 	int error;
 
+#if defined(CONFIG_KSU_MANUAL_HOOK) || defined(CONFIG_KSU_SUSFS)
+	ksu_handle_stat(&dfd, &filename, &flag);
+#endif
 	error = vfs_fstatat(dfd, filename, &stat, flag);
 	if (error)
 		return error;
@@ -643,6 +715,14 @@ COMPAT_SYSCALL_DEFINE4(newfstatat, unsigned int, dfd,
 	struct kstat stat;
 	int error;
 
+#if defined(CONFIG_KSU_MANUAL_HOOK) || defined(CONFIG_KSU_SUSFS)
+	/* compat dfd is unsigned in the ABI; use an int local for the hook. */
+	{
+		int ksu_dfd = (int)dfd;
+		ksu_handle_stat(&ksu_dfd, &filename, &flag);
+		dfd = (unsigned int)ksu_dfd;
+	}
+#endif
 	error = vfs_fstatat(dfd, filename, &stat, flag);
 	if (error)
 		return error;

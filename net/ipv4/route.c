@@ -1386,6 +1386,34 @@ static struct fib_nh_exception *find_exception(struct fib_nh *nh, __be32 daddr)
 	return NULL;
 }
 
+/* Return the forwarding MTU for a FIB lookup without a cached dst.
+ * Keep the same PMTU exception and locked-metric semantics as the normal
+ * IPv4 route path.  Caller holds RCU, as required by find_exception().
+ */
+u32 ip_mtu_from_fib_result(struct fib_result *res, __be32 daddr)
+{
+	struct fib_info *fi = res->fi;
+	struct fib_nh *nh = &fi->fib_nh[res->nh_sel];
+	struct net_device *dev = nh->nh_dev;
+	u32 mtu = 0;
+
+	if (dev_net(dev)->ipv4.sysctl_ip_fwd_use_pmtu ||
+	    fi->fib_metrics->metrics[RTAX_LOCK - 1] & (1 << RTAX_MTU))
+		mtu = fi->fib_mtu;
+
+	if (likely(!mtu)) {
+		struct fib_nh_exception *fnhe = find_exception(nh, daddr);
+
+		if (fnhe && !time_after_eq(jiffies, fnhe->fnhe_expires))
+			mtu = fnhe->fnhe_pmtu;
+	}
+
+	if (likely(!mtu))
+		mtu = min(READ_ONCE(dev->mtu), IP_MAX_MTU);
+
+	return mtu - lwtunnel_headroom(nh->nh_lwtstate, mtu);
+}
+
 static bool rt_bind_exception(struct rtable *rt, struct fib_nh_exception *fnhe,
 			      __be32 daddr, const bool do_cache)
 {
@@ -1433,6 +1461,24 @@ static bool rt_bind_exception(struct rtable *rt, struct fib_nh_exception *fnhe,
 	return ret;
 }
 
+struct uncached_list {
+	spinlock_t		lock;
+	struct list_head	head;
+};
+
+static DEFINE_PER_CPU_ALIGNED(struct uncached_list, rt_uncached_list);
+
+static void rt_add_uncached_list(struct rtable *rt)
+{
+	struct uncached_list *ul = raw_cpu_ptr(&rt_uncached_list);
+
+	rt->rt_uncached_list = ul;
+
+	spin_lock_bh(&ul->lock);
+	list_add_tail(&rt->rt_uncached, &ul->head);
+	spin_unlock_bh(&ul->lock);
+}
+
 static bool rt_cache_route(struct fib_nh *nh, struct rtable *rt)
 {
 	struct rtable *orig, *prev, **p;
@@ -1452,7 +1498,7 @@ static bool rt_cache_route(struct fib_nh *nh, struct rtable *rt)
 	prev = cmpxchg(p, orig, rt);
 	if (prev == orig) {
 		if (orig) {
-			dst_dev_put(&orig->dst);
+			rt_add_uncached_list(orig);
 			dst_release(&orig->dst);
 		}
 	} else {
@@ -1461,24 +1507,6 @@ static bool rt_cache_route(struct fib_nh *nh, struct rtable *rt)
 	}
 
 	return ret;
-}
-
-struct uncached_list {
-	spinlock_t		lock;
-	struct list_head	head;
-};
-
-static DEFINE_PER_CPU_ALIGNED(struct uncached_list, rt_uncached_list);
-
-static void rt_add_uncached_list(struct rtable *rt)
-{
-	struct uncached_list *ul = raw_cpu_ptr(&rt_uncached_list);
-
-	rt->rt_uncached_list = ul;
-
-	spin_lock_bh(&ul->lock);
-	list_add_tail(&rt->rt_uncached, &ul->head);
-	spin_unlock_bh(&ul->lock);
 }
 
 static void ipv4_dst_destroy(struct dst_entry *dst)

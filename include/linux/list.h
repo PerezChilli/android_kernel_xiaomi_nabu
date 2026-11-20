@@ -106,6 +106,20 @@ static inline void __list_del(struct list_head * prev, struct list_head * next)
 	WRITE_ONCE(prev->next, next);
 }
 
+/*
+ * Delete a list entry and clear the 'prev' pointer.
+ *
+ * This is a special-purpose list clearing method used in the networking code
+ * for lists allocated as per-cpu, where we don't want to incur the extra
+ * WRITE_ONCE() overhead of a regular list_del_init(). The code that uses this
+ * needs to check the node 'prev' pointer instead of calling list_empty().
+ */
+static inline void __list_del_clearprev(struct list_head *entry)
+{
+	__list_del(entry->prev, entry->next);
+	entry->prev = NULL;
+}
+
 /**
  * list_del - deletes entry from list.
  * @entry: the element to delete from the list.
@@ -664,6 +678,16 @@ static inline void INIT_HLIST_NODE(struct hlist_node *h)
 static inline int hlist_unhashed(const struct hlist_node *h)
 {
 	return !h->pprev;
+}
+
+/* This variant of hlist_unhashed() must be used in lockless contexts
+ * to avoid potential load-tearing.
+ * The READ_ONCE() is paired with the various WRITE_ONCE() in hlist
+ * helpers that are defined below.
+ */
+static inline int hlist_unhashed_lockless(const struct hlist_node *h)
+{
+	return !READ_ONCE(h->pprev);
 }
 
 static inline int hlist_empty(const struct hlist_head *h)

@@ -198,50 +198,24 @@ void cycle_count_update(struct cycle_counter *counter, int batt_soc,
  * Returns the cycle counter for a SOC bucket.
  *
  */
-static int get_bucket_cycle_count(struct cycle_counter *counter)
-{
-	int count;
-
-	if (!counter)
-		return 0;
-
-	if ((counter->id <= 0) || (counter->id > BUCKET_COUNT))
-		return -EINVAL;
-
-	mutex_lock(&counter->lock);
-	count = counter->count[counter->id - 1];
-	mutex_unlock(&counter->lock);
-	return count;
-}
-
-/**
- * get_cycle_count -
- * @counter: Cycle counter object
- * @count: Average cycle count returned to the caller
- *
- * Get average cycle count for all buckets
- *
+/* Read a consistent snapshot of all FG buckets.  Previously the read
+ * helpers shared counter->id and released the lock between buckets; a
+ * concurrent reader or cycle_count_update() could expose a mixed average.
+ * This changes neither the persisted bucket values nor the charge algorithm.
  */
 int get_cycle_count(struct cycle_counter *counter, int *count)
 {
-	int i, rc, temp = 0;
+	int i, total = 0;
 
-	for (i = 1; i <= BUCKET_COUNT; i++) {
-		counter->id = i;
-		rc = get_bucket_cycle_count(counter);
-		if (rc < 0) {
-			pr_err("Couldn't get cycle count rc=%d\n", rc);
-			return rc;
-		}
-		temp += rc;
-	}
+	if (!counter || !count)
+		return -EINVAL;
 
-	/*
-	 * Normalize the counter across each bucket so that we can get
-	 * the overall charge cycle count.
-	 */
+	mutex_lock(&counter->lock);
+	for (i = 0; i < BUCKET_COUNT; i++)
+		total += counter->count[i];
+	mutex_unlock(&counter->lock);
 
-	*count = temp / BUCKET_COUNT;
+	*count = total / BUCKET_COUNT;
 	return 0;
 }
 
@@ -255,25 +229,18 @@ int get_cycle_count(struct cycle_counter *counter, int *count)
  */
 int get_cycle_counts(struct cycle_counter *counter, const char **buf)
 {
-	int i, rc, len = 0;
+	int i, len = 0;
 
-	for (i = 1; i <= BUCKET_COUNT; i++) {
-		counter->id = i;
-		rc = get_bucket_cycle_count(counter);
-		if (rc < 0) {
-			pr_err("Couldn't get cycle count rc=%d\n", rc);
-			return rc;
-		}
+	if (!counter || !buf)
+		return -EINVAL;
 
-		if (sizeof(counter->str_buf) - len < 8) {
-			pr_err("Invalid length %d\n", len);
-			return -EINVAL;
-		}
-
-		len += snprintf(counter->str_buf + len, 8, "%d ", rc);
+	mutex_lock(&counter->lock);
+	for (i = 0; i < BUCKET_COUNT; i++) {
+		len += scnprintf(counter->str_buf + len,
+			sizeof(counter->str_buf) - len, "%u ", counter->count[i]);
 	}
+	mutex_unlock(&counter->lock);
 
-	counter->str_buf[len] = '\0';
 	*buf = counter->str_buf;
 	return 0;
 }

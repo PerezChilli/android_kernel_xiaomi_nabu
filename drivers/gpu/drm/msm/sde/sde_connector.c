@@ -19,6 +19,7 @@
 #include "sde_connector.h"
 #include "sde_encoder.h"
 #include <linux/backlight.h>
+#include <linux/irq.h>
 #include <linux/string.h>
 #include "dsi_drm.h"
 #include "dsi_display.h"
@@ -2650,11 +2651,16 @@ struct drm_connector *sde_connector_init(struct drm_device *dev,
 		/* register esd irq and enable it after panel enabled */
 		if (dsi_display && dsi_display->panel &&
 			dsi_display->panel->esd_config.esd_err_irq_gpio > 0) {
+			/* The DSI bridge enables ESD IRQ only after panel enable. */
+			irq_set_status_flags(dsi_display->panel->esd_config.esd_err_irq,
+					     IRQ_NOAUTOEN);
 			rc = request_threaded_irq(dsi_display->panel->esd_config.esd_err_irq,
 							NULL, esd_err_irq_handle,
 							dsi_display->panel->esd_config.esd_err_irq_flags,
 							"esd_err_irq", c_conn);
 			if (rc < 0) {
+				irq_clear_status_flags(dsi_display->panel->esd_config.esd_err_irq,
+						      IRQ_NOAUTOEN);
 				pr_err("%s: request irq %d failed\n", __func__, dsi_display->panel->esd_config.esd_err_irq);
 					dsi_display->panel->esd_config.esd_err_irq = 0;
 			} else {

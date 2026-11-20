@@ -78,9 +78,15 @@ UTS_TRUNCATE="cut -b -$UTS_LEN"
   echo \#define LINUX_COMPILE_BY \"`echo $LINUX_COMPILE_BY | $UTS_TRUNCATE`\"
   echo \#define LINUX_COMPILE_HOST \"`echo $LINUX_COMPILE_HOST | $UTS_TRUNCATE`\"
 
-  CC_VERSION=$($CC -v 2>&1 | grep ' version ' | sed 's/[[:space:]]*$//')
-  LD_VERSION=$($LD -v | head -n1 | sed 's/(compatible with [^)]*)//' \
-		      | sed 's/[[:space:]]*$//')
+  # HyperOS 3 MiuiAboutPhoneUtils parses the complete /proc/version line.
+  # Git remote / commit metadata in ClangBuiltLinux version strings introduces
+  # nested parentheses, making its kernel-version matcher return "Unavailable".
+  # Keep the compiler and linker names and exact versions, strip only the
+  # parenthesized provenance suffix. Do not change CONFIG_LOCALVERSION.
+  CC_VERSION=$($CC -v 2>&1 | grep ' version ' | head -n1 \
+      | sed 's/[[:space:]]*(.*$//; s/[[:space:]]*$//')
+  LD_VERSION=$($LD -v | head -n1 \
+      | sed 's/[[:space:]]*(.*$//; s/[[:space:]]*$//')
   printf '#define LINUX_COMPILER "%s"\n' "$CC_VERSION, $LD_VERSION"
 ) > .tmpcompile
 

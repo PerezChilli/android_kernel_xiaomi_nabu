@@ -891,6 +891,7 @@ void tcp_disable_fack(struct tcp_sock *tp)
 static void tcp_dsack_seen(struct tcp_sock *tp)
 {
 	tp->rx_opt.sack_ok |= TCP_DSACK_SEEN;
+	tp->dsack_dups++;
 }
 
 static void tcp_update_reordering(struct sock *sk, const int metric,
@@ -3702,6 +3703,8 @@ static int tcp_ack(struct sock *sk, const struct sk_buff *skb, int flag)
 		sk_dst_confirm(sk);
 
 	delivered = tp->delivered - delivered;	/* freshly ACKed or SACKed */
+	if (flag & FLAG_ECE)
+		tp->delivered_ce += delivered;
 	lost = tp->lost - lost;			/* freshly marked lost */
 	tcp_rate_gen(sk, delivered, lost, is_sack_reneg, sack_state.rate);
 	tcp_cong_control(sk, ack, delivered, flag, sack_state.rate);
@@ -6279,7 +6282,7 @@ EXPORT_SYMBOL(inet_reqsk_alloc);
  * Return true if a syncookie should be sent
  */
 static bool tcp_syn_flood_action(const struct sock *sk,
-				 const struct sk_buff *skb,
+				 const struct tcphdr *th,
 				 const char *proto)
 {
 	struct request_sock_queue *queue = &inet_csk(sk)->icsk_accept_queue;
@@ -6300,10 +6303,68 @@ static bool tcp_syn_flood_action(const struct sock *sk,
 	    net->ipv4.sysctl_tcp_syncookies != 2 &&
 	    xchg(&queue->synflood_warned, 1) == 0)
 		pr_info("%s: Possible SYN flooding on port %d. %s.  Check SNMP counters.\n",
-			proto, ntohs(tcp_hdr(skb)->dest), msg);
+			proto, ntohs(th->dest), msg);
 
 	return want_cookie;
 }
+
+/* Generate SYN cookies for BPF with the same admission checks as TCP.
+ * The TCP header is validated (including options length) by the BPF helper.
+ */
+static u16 tcp_parse_syncookie_mss(const struct tcphdr *th, u16 user_mss)
+{
+	const u8 *ptr = (const u8 *)(th + 1);
+	int left = (th->doff * 4) - sizeof(*th);
+
+	if (left < 0)
+		return 0;
+	while (left > 0) {
+		u8 opcode = *ptr++;
+		u8 length;
+
+		left--;
+		if (opcode == TCPOPT_EOL)
+			break;
+		if (opcode == TCPOPT_NOP)
+			continue;
+		if (left < 1)
+			break;
+		length = *ptr++;
+		left--;
+		if (length < 2 || length - 2 > left)
+			break;
+		if (opcode == TCPOPT_MSS && length == TCPOLEN_MSS) {
+			u16 mss = get_unaligned_be16(ptr);
+
+			if (mss)
+				return user_mss ? min(mss, user_mss) : mss;
+		}
+		ptr += length - 2;
+		left -= length - 2;
+	}
+	return 0;
+}
+
+u16 tcp_get_syncookie_mss(struct request_sock_ops *rsk_ops,
+			 const struct tcp_request_sock_ops *af_ops,
+			 struct sock *sk, struct tcphdr *th)
+{
+	struct tcp_sock *tp = tcp_sk(sk);
+	u16 mss;
+
+	if (sock_net(sk)->ipv4.sysctl_tcp_syncookies != 2 &&
+	    !inet_csk_reqsk_queue_is_full(sk))
+		return 0;
+	if (!tcp_syn_flood_action(sk, th, rsk_ops->slab_name))
+		return 0;
+	if (sk_acceptq_is_full(sk)) {
+		NET_INC_STATS(sock_net(sk), LINUX_MIB_LISTENOVERFLOWS);
+		return 0;
+	}
+	mss = tcp_parse_syncookie_mss(th, tp->rx_opt.user_mss);
+	return mss ? mss : af_ops->mss_clamp;
+}
+EXPORT_SYMBOL_GPL(tcp_get_syncookie_mss);
 
 static void tcp_reqsk_record_syn(const struct sock *sk,
 				 struct request_sock *req,
@@ -6343,7 +6404,7 @@ int tcp_conn_request(struct request_sock_ops *rsk_ops,
 	 */
 	if ((net->ipv4.sysctl_tcp_syncookies == 2 ||
 	     inet_csk_reqsk_queue_is_full(sk)) && !isn) {
-		want_cookie = tcp_syn_flood_action(sk, skb, rsk_ops->slab_name);
+		want_cookie = tcp_syn_flood_action(sk, tcp_hdr(skb), rsk_ops->slab_name);
 		if (!want_cookie)
 			goto drop;
 	}
