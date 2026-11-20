@@ -79,6 +79,13 @@ extern struct file *proc_ns_fget(int fd);
 extern void *ns_get_path(struct path *path, struct task_struct *task,
 			const struct proc_ns_operations *ns_ops);
 
+/* Caller callback returns a referenced namespace or NULL. */
+extern void *ns_get_path_cb(struct path *path,
+                            struct ns_common *(*get_ns)(void *),
+                            void *private_data);
+
+extern bool ns_match(const struct ns_common *ns, dev_t dev, ino_t ino);
+
 extern int ns_get_name(char *buf, size_t size, struct task_struct *task,
 			const struct proc_ns_operations *ns_ops);
 extern void nsfs_init(void);

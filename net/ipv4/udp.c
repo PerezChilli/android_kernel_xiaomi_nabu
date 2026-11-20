@@ -228,11 +228,11 @@ static int udp_reuseport_add_sock(struct sock *sk, struct udp_hslot *hslot)
 		    (sk2->sk_bound_dev_if == sk->sk_bound_dev_if) &&
 		    sk2->sk_reuseport && uid_eq(uid, sock_i_uid(sk2)) &&
 		    inet_rcv_saddr_equal(sk, sk2, false)) {
-			return reuseport_add_sock(sk, sk2);
+			return reuseport_add_sock(sk, sk2, inet_rcv_saddr_any(sk));
 		}
 	}
 
-	return reuseport_alloc(sk);
+	return reuseport_alloc(sk, inet_rcv_saddr_any(sk));
 }
 
 /**
@@ -2262,17 +2262,23 @@ int __udp4_lib_rcv(struct sk_buff *skb, struct udp_table *udptable,
 	if (udp4_csum_init(skb, uh, proto))
 		goto csum_error;
 
-	sk = skb_steal_sock(skb);
-	if (sk) {
-		struct dst_entry *dst = skb_dst(skb);
-		int ret;
+	/* The prefetched socket can be RCU-owned, not refcounted. */
+	{
+		bool refcounted;
 
-		if (unlikely(sk->sk_rx_dst != dst))
-			udp_sk_rx_dst_set(sk, dst);
+		sk = skb_steal_sock(skb, &refcounted);
+		if (sk) {
+			struct dst_entry *dst = skb_dst(skb);
+			int ret;
 
-		ret = udp_unicast_rcv_skb(sk, skb, uh);
-		sock_put(sk);
-		return ret;
+			if (unlikely(sk->sk_rx_dst != dst))
+				udp_sk_rx_dst_set(sk, dst);
+
+			ret = udp_unicast_rcv_skb(sk, skb, uh);
+			if (refcounted)
+				sock_put(sk);
+			return ret;
+		}
 	}
 
 	if (rt->rt_flags & (RTCF_BROADCAST|RTCF_MULTICAST))

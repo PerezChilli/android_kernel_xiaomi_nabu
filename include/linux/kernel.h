@@ -43,6 +43,14 @@
 #define S64_MAX		((s64)(U64_MAX>>1))
 #define S64_MIN		((s64)(-S64_MAX - 1))
 
+/* Qualcomm tracepoints may pass up to 18 arguments. */
+#define __COUNT_ARGS(_0, _1, _2, _3, _4, _5, _6, _7, _8, _9, _10, _11, _12, _13, _14, _15, _16, _17, _18, _n, X...) _n
+#define COUNT_ARGS(X...) __COUNT_ARGS(, ##X, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0)
+
+#define __CONCAT(a, b) a ## b
+#define CONCATENATE(a, b) __CONCAT(a, b)
+
+
 #define STACK_MAGIC	0xdeadbeef
 
 /**
@@ -234,6 +242,17 @@ extern int _cond_resched(void);
 				   int preempt_offset) { }
 # define might_sleep() do { might_resched(); } while (0)
 # define sched_annotate_sleep() do { } while (0)
+#endif
+
+/* Agate / upstream non-RT BPF execution-context annotation.
+ * CONFIG_DEBUG_ATOMIC_SLEEP is disabled in this experiment; enable it only
+ * after backporting the full __cant_sleep() implementation. */
+#ifndef CONFIG_DEBUG_ATOMIC_SLEEP
+# define cant_sleep() do { } while (0)
+# define cant_migrate() cant_sleep()
+#else
+/* Intentional compile failure until upstream lockdep annotation is backported. */
+# define cant_migrate() __cant_sleep_needs_backport()
 #endif
 
 #define might_sleep_if(cond) do { if (cond) might_sleep(); } while (0)

@@ -655,6 +655,10 @@ enum adreno_device_flags {
 struct adreno_drawobj_profile_entry {
 	uint64_t started;
 	uint64_t retired;
+#ifdef CONFIG_QCOM_KGSL_A640_CTX_PROFILE_TEST
+	uint64_t ctx_start;
+	uint64_t ctx_end;
+#endif
 };
 
 #define ADRENO_DRAWOBJ_PROFILE_COUNT \

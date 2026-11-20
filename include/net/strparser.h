@@ -57,10 +57,32 @@ struct strp_msg {
 	int offset;
 };
 
+/* Share skb->cb between the sockmap BPF program and stream parser.
+ * The writable BPF cb area occupies the first 20 bytes, and
+ * the parser state follows it rather than overlapping it.
+ */
+struct _strp_msg {
+	struct strp_msg strp;
+	int accum_len;
+};
+
+#define SK_SKB_CB_PRIV_LEN 20
+struct sk_skb_cb {
+	unsigned char data[SK_SKB_CB_PRIV_LEN];
+	struct _strp_msg strp;
+	u64 temp_reg;
+};
+
 static inline struct strp_msg *strp_msg(struct sk_buff *skb)
 {
-	return (struct strp_msg *)((void *)skb->cb +
-		offsetof(struct qdisc_skb_cb, data));
+	struct sk_skb_cb *cb = (struct sk_skb_cb *)skb->cb;
+	return &cb->strp.strp;
+}
+
+static inline struct _strp_msg *_strp_msg(struct sk_buff *skb)
+{
+	struct sk_skb_cb *cb = (struct sk_skb_cb *)skb->cb;
+	return &cb->strp;
 }
 
 /* Structure for an attached lower socket */

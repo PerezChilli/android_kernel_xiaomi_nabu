@@ -465,6 +465,8 @@ struct kgsl_context {
 struct kgsl_process_private {
 	unsigned long priv;
 	pid_t pid;
+	/* Android app UID captured when the KGSL process is first opened. */
+	uid_t uid;
 	char comm[TASK_COMM_LEN];
 	spinlock_t mem_lock;
 	struct kref refcount;

@@ -22,6 +22,8 @@
 #include <linux/tcp.h>
 #include <net/flow_dissector.h>
 #include <scsi/fc/fc_fcoe.h>
+#include <linux/bpf.h>
+#include <linux/bpf-netns.h>
 
 static void dissector_set_key(struct flow_dissector *flow_dissector,
 			      enum flow_dissector_key_id key_id)
@@ -58,6 +60,38 @@ void skb_flow_dissector_init(struct flow_dissector *flow_dissector,
 				   FLOW_DISSECTOR_KEY_BASIC));
 }
 EXPORT_SYMBOL(skb_flow_dissector_init);
+
+#ifdef CONFIG_BPF_SYSCALL
+int flow_dissector_bpf_prog_attach_check(struct net *net,
+					 struct bpf_prog *prog)
+{
+	enum netns_bpf_attach_type type = NETNS_BPF_FLOW_DISSECTOR;
+
+	if (net == &init_net) {
+		/* BPF flow dissector in the root namespace overrides
+		 * any per-net-namespace one. When attaching to root,
+		 * make sure we don't have any BPF program attached
+		 * to the non-root namespaces.
+		 */
+		struct net *ns;
+
+		for_each_net(ns) {
+			if (ns == &init_net)
+				continue;
+			if (rcu_access_pointer(ns->bpf.run_array[type]))
+				return -EEXIST;
+		}
+	} else {
+		/* Make sure root flow dissector is not attached
+		 * when attaching to the non-root namespace.
+		 */
+		if (rcu_access_pointer(init_net.bpf.run_array[type]))
+			return -EEXIST;
+	}
+
+	return 0;
+}
+#endif /* CONFIG_BPF_SYSCALL */
 
 /**
  * skb_flow_get_be16 - extract be16 entity

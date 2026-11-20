@@ -27,3 +27,6 @@ EXPORT_TRACEPOINT_SYMBOL(kgsl_user_pwrlevel_constraint);
 EXPORT_TRACEPOINT_SYMBOL(kgsl_constraint);
 
 EXPORT_TRACEPOINT_SYMBOL(gpu_frequency);
+#ifdef CONFIG_QCOM_KGSL_GPU_WORK_PERIOD
+EXPORT_TRACEPOINT_SYMBOL(gpu_work_period);
+#endif

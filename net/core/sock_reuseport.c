@@ -8,11 +8,14 @@
 
 #include <net/sock_reuseport.h>
 #include <linux/bpf.h>
+#include <linux/idr.h>
 #include <linux/rcupdate.h>
 
 #define INIT_SOCKS 128
 
-static DEFINE_SPINLOCK(reuseport_lock);
+static DEFINE_IDA(reuseport_ida);
+
+DEFINE_SPINLOCK(reuseport_lock);
 
 static struct sock_reuseport *__reuseport_alloc(unsigned int max_socks)
 {
@@ -29,9 +32,10 @@ static struct sock_reuseport *__reuseport_alloc(unsigned int max_socks)
 	return reuse;
 }
 
-int reuseport_alloc(struct sock *sk)
+int reuseport_alloc(struct sock *sk, bool bind_inany)
 {
 	struct sock_reuseport *reuse;
+	int id;
 
 	/* bh lock used since this function call may precede hlist lock in
 	 * soft irq of receive path or setsockopt from process context
@@ -41,9 +45,13 @@ int reuseport_alloc(struct sock *sk)
 	/* Allocation attempts can occur concurrently via the setsockopt path
 	 * and the bind/hash path.  Nothing to do when we lose the race.
 	 */
-	if (rcu_dereference_protected(sk->sk_reuseport_cb,
-				      lockdep_is_held(&reuseport_lock)))
+	reuse = rcu_dereference_protected(sk->sk_reuseport_cb,
+				      lockdep_is_held(&reuseport_lock));
+	if (reuse) {
+		if (bind_inany)
+			reuse->bind_inany = true;
 		goto out;
+	}
 
 	reuse = __reuseport_alloc(INIT_SOCKS);
 	if (!reuse) {
@@ -51,6 +59,14 @@ int reuseport_alloc(struct sock *sk)
 		return -ENOMEM;
 	}
 
+	id = ida_simple_get(&reuseport_ida, 0, 0, GFP_ATOMIC);
+	if (id < 0) {
+		kfree(reuse);
+		spin_unlock_bh(&reuseport_lock);
+		return id;
+	}
+	reuse->reuseport_id = id;
+	reuse->bind_inany = bind_inany;
 	reuse->socks[0] = sk;
 	reuse->num_socks = 1;
 	rcu_assign_pointer(sk->sk_reuseport_cb, reuse);
@@ -78,6 +94,8 @@ static struct sock_reuseport *reuseport_grow(struct sock_reuseport *reuse)
 	more_reuse->max_socks = more_socks_size;
 	more_reuse->num_socks = reuse->num_socks;
 	more_reuse->prog = reuse->prog;
+	more_reuse->reuseport_id = reuse->reuseport_id;
+	more_reuse->bind_inany = reuse->bind_inany;
 
 	memcpy(more_reuse->socks, reuse->socks,
 	       reuse->num_socks * sizeof(struct sock *));
@@ -101,6 +119,7 @@ static void reuseport_free_rcu(struct rcu_head *head)
 	reuse = container_of(head, struct sock_reuseport, rcu);
 	if (reuse->prog)
 		bpf_prog_destroy(reuse->prog);
+	ida_simple_remove(&reuseport_ida, reuse->reuseport_id);
 	kfree(reuse);
 }
 
@@ -110,12 +129,12 @@ static void reuseport_free_rcu(struct rcu_head *head)
  *  @sk2: Socket belonging to the existing reuseport group.
  *  May return ENOMEM and not add socket to group under memory pressure.
  */
-int reuseport_add_sock(struct sock *sk, struct sock *sk2)
+int reuseport_add_sock(struct sock *sk, struct sock *sk2, bool bind_inany)
 {
 	struct sock_reuseport *old_reuse, *reuse;
 
 	if (!rcu_access_pointer(sk2->sk_reuseport_cb)) {
-		int err = reuseport_alloc(sk2);
+		int err = reuseport_alloc(sk2, bind_inany);
 
 		if (err)
 			return err;
@@ -160,6 +179,8 @@ void reuseport_detach_sock(struct sock *sk)
 	spin_lock_bh(&reuseport_lock);
 	reuse = rcu_dereference_protected(sk->sk_reuseport_cb,
 					  lockdep_is_held(&reuseport_lock));
+	/* Remove the socket from BPF reuseport arrays while the group is locked. */
+	bpf_sk_reuseport_detach(sk);
 	rcu_assign_pointer(sk->sk_reuseport_cb, NULL);
 
 	for (i = 0; i < reuse->num_socks; i++) {

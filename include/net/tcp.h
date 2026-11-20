@@ -160,6 +160,8 @@ void tcp_time_wait(struct sock *sk, int state, int timeo);
 #define TCP_KEEPALIVE_PROBES	9		/* Max of 9 keepalive probes	*/
 #define TCP_KEEPALIVE_INTVL	(75*HZ)
 
+int tcp_sock_set_keepidle_locked(struct sock *sk, int val);
+
 #define MAX_TCP_KEEPIDLE	32767
 #define MAX_TCP_KEEPINTVL	32767
 #define MAX_TCP_KEEPCNT		127
@@ -550,6 +552,10 @@ static inline u32 tcp_cookie_time(void)
 
 u32 __cookie_v4_init_sequence(const struct iphdr *iph, const struct tcphdr *th,
 			      u16 *mssp);
+u16 tcp_v4_get_syncookie(struct sock *sk, struct iphdr *iph,
+			 struct tcphdr *th, u32 *cookie);
+u16 tcp_v6_get_syncookie(struct sock *sk, struct ipv6hdr *iph,
+			 struct tcphdr *th, u32 *cookie);
 __u32 cookie_v4_init_sequence(const struct sk_buff *skb, __u16 *mss);
 u64 cookie_init_timestamp(struct request_sock *req);
 bool cookie_timestamp_decode(const struct net *net,
@@ -653,6 +659,8 @@ void tcp_init_buffer_space(struct sock *sk);
 
 static inline void tcp_bound_rto(const struct sock *sk)
 {
+	if (inet_csk(sk)->icsk_rto < inet_csk(sk)->icsk_rto_min)
+		inet_csk(sk)->icsk_rto = inet_csk(sk)->icsk_rto_min;
 	if (inet_csk(sk)->icsk_rto > TCP_RTO_MAX)
 		inet_csk(sk)->icsk_rto = TCP_RTO_MAX;
 }
@@ -880,6 +888,15 @@ struct tcp_skb_cb {
 
 #define TCP_SKB_CB(__skb)	((struct tcp_skb_cb *)&((__skb)->cb[0]))
 
+/* BPF stream parser may extend the linear skb data with skb_pull_data().
+ * Keep the saved parser data_end in TCP_SKB_CB in sync.
+ * This member already exists in Perf's tcp_skb_cb.bpf union.
+ */
+static inline void bpf_compute_data_end_sk_skb(struct sk_buff *skb)
+{
+	TCP_SKB_CB(skb)->bpf.data_end = skb->data + skb_headlen(skb);
+}
+
 
 #if IS_ENABLED(CONFIG_IPV6)
 /* This is the variant of inet6_iif() that must be used by TCP,
@@ -987,6 +1004,7 @@ enum tcp_ca_ack_event_flags {
 #define TCP_CONG_NON_RESTRICTED 0x1
 /* Requires ECN/ECT set on all packets */
 #define TCP_CONG_NEEDS_ECN	0x2
+#define TCP_CONG_MASK	(TCP_CONG_NON_RESTRICTED | TCP_CONG_NEEDS_ECN)
 
 union tcp_cc_info;
 
@@ -1937,6 +1955,11 @@ struct tcp_sock_af_ops {
 				     int optlen);
 #endif
 };
+
+struct tcp_request_sock_ops;
+u16 tcp_get_syncookie_mss(struct request_sock_ops *rsk_ops,
+			 const struct tcp_request_sock_ops *af_ops,
+			 struct sock *sk, struct tcphdr *th);
 
 struct tcp_request_sock_ops {
 	u16 mss_clamp;

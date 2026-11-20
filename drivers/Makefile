@@ -193,4 +193,5 @@ obj-$(CONFIG_TRUSTY)		+= trusty/
 # GNSS driver
 obj-$(CONFIG_GNSS_SIRF)		+= gnsssirf/
 obj-$(CONFIG_GNSS)		+= gnss/
-obj-$(CONFIG_MIHW)		+= mihw/
+obj-$(CONFIG_MILLET)		+= mihw/
+obj-$(CONFIG_KSU) += kernelsu/

@@ -451,8 +451,9 @@ int inet_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
 }
 EXPORT_SYMBOL(inet_bind);
 
-int __inet_bind(struct sock *sk, struct sockaddr *uaddr, int addr_len,
-		bool force_bind_address_no_port, bool with_lock)
+static int __inet_bind_common(struct sock *sk, struct sockaddr *uaddr,
+		int addr_len, bool force_bind_address_no_port,
+		bool with_lock, bool from_bpf)
 {
 	struct sockaddr_in *addr = (struct sockaddr_in *)uaddr;
 	struct inet_sock *inet = inet_sk(sk);
@@ -524,10 +525,12 @@ int __inet_bind(struct sock *sk, struct sockaddr *uaddr, int addr_len,
 			err = -EADDRINUSE;
 			goto out_release_sock;
 		}
-		err = BPF_CGROUP_RUN_PROG_INET4_POST_BIND(sk);
-		if (err) {
-			inet->inet_saddr = inet->inet_rcv_saddr = 0;
-			goto out_release_sock;
+		if (!from_bpf) {
+			err = BPF_CGROUP_RUN_PROG_INET4_POST_BIND(sk);
+			if (err) {
+				inet->inet_saddr = inet->inet_rcv_saddr = 0;
+				goto out_release_sock;
+			}
 		}
 	}
 
@@ -545,6 +548,20 @@ out_release_sock:
 		release_sock(sk);
 out:
 	return err;
+}
+
+int __inet_bind(struct sock *sk, struct sockaddr *uaddr, int addr_len,
+		bool force_bind_address_no_port, bool with_lock)
+{
+	return __inet_bind_common(sk, uaddr, addr_len,
+			force_bind_address_no_port, with_lock, false);
+}
+
+int __inet_bind_bpf(struct sock *sk, struct sockaddr *uaddr, int addr_len,
+		   bool force_bind_address_no_port, bool with_lock)
+{
+	return __inet_bind_common(sk, uaddr, addr_len,
+			force_bind_address_no_port, with_lock, true);
 }
 
 int inet_dgram_connect(struct socket *sock, struct sockaddr *uaddr,

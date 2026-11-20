@@ -539,7 +539,8 @@ void rmnet_egress_handler(struct sk_buff *skb)
 
 	trace_rmnet_low(RMNET_MODULE, RMNET_TX_UL_PKT, 0xDEF, 0xDEF, 0xDEF,
 			0xDEF, (void *)skb, NULL);
-	sk_pacing_shift_update(skb->sk, 8);
+	if (skb->sk)
+		skb->sk->sk_pacing_shift = 8;
 
 	orig_dev = skb->dev;
 	priv = netdev_priv(orig_dev);
