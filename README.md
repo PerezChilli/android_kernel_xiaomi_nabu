@@ -12,3 +12,7 @@ The branches share the kernel's BPF, KGSL/Adreno GPU telemetry, display, battery
 
 - [Sources and upstream attribution](docs/SOURCES.md)
 - [Changes and technical rationale](docs/CHANGES.md)
+
+## BakaSU Android manager
+
+This is the **no-root** kernel variant. BakaSU / KernelSU Android manager is **not required** and cannot provide root functionality on this branch. For the rooted variants, see `public/bk` or `public/bks` and their `docs/BAKASU-MANAGER.md`.
