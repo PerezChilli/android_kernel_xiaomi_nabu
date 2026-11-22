@@ -6,12 +6,12 @@ Linux kernel source tree for **Xiaomi Pad 5 (nabu)**, adapted for **HyperOS 3 / 
 
 | Branch | Kernel configuration | Root support |
 | --- | --- | --- |
-| [`main`](https://github.com/PerezChilli/android_kernel_xiaomi_nabu/tree/main) | No-root | Disabled |
-| [`bk`](https://github.com/PerezChilli/android_kernel_xiaomi_nabu/tree/bk) | BakaSU | BakaSU v4.2.0-rc3 |
-| [`bks`](https://github.com/PerezChilli/android_kernel_xiaomi_nabu/tree/bks) | BakaSU + SUSFS | BakaSU v4.2.0-rc3 and SUSFS v2.3.0 (non-GKI) |
-| [`base`](https://github.com/PerezChilli/android_kernel_xiaomi_nabu/tree/base) | Base kernel source snapshot | Reference baseline |
+| [`nabu-w-oss`](https://github.com/PerezChilli/android_kernel_xiaomi_nabu/tree/nabu-w-oss) | No-root | Disabled |
+| [`nabu-w-oss-bk`](https://github.com/PerezChilli/android_kernel_xiaomi_nabu/tree/nabu-w-oss-bk) | BakaSU | BakaSU v4.2.0-rc3 |
+| [`nabu-w-oss-bks`](https://github.com/PerezChilli/android_kernel_xiaomi_nabu/tree/nabu-w-oss-bks) | BakaSU + SUSFS | BakaSU v4.2.0-rc3 and SUSFS v2.3.0 (non-GKI) |
+| [`nabu-v-oss`](https://github.com/PerezChilli/android_kernel_xiaomi_nabu/tree/nabu-v-oss) | Base kernel source snapshot | Reference baseline |
 
-**Current branch:** No-root
+**Current branch:** No-root (`nabu-w-oss`)
 **Kernel release configuration:** `4.14.180-bpf-os3`
 
 ## Kernel changes
@@ -27,7 +27,7 @@ See [technical changes](docs/CHANGES.md) for implementation details. EROFS was a
 
 ## BakaSU Android manager
 
-This is the **no-root** configuration. An Android root manager is not required and cannot enable root access when root support is disabled in the kernel. For rooted builds, use the `bk` or `bks` branch.
+This is the **no-root** configuration. An Android root manager is not required and cannot enable root access when root support is disabled in the kernel. For rooted builds, use the `nabu-w-oss-bk` or `nabu-w-oss-bks` branch.
 
 ## Building
 
@@ -51,10 +51,10 @@ Install **Clang and LLD 20.1.8** separately and make sure the same toolchain dir
 ```bash
 git clone https://github.com/PerezChilli/android_kernel_xiaomi_nabu.git
 cd android_kernel_xiaomi_nabu
-git switch main
+git switch nabu-w-oss
 ```
 
-Use `main` for **no-root**, `bk` for **BakaSU**, or `bks` for **BakaSU + SUSFS**. Each branch has its own tracked kernel configuration.
+Use `nabu-w-oss` for **no-root**, `nabu-w-oss-bk` for **BakaSU**, or `nabu-w-oss-bks` for **BakaSU + SUSFS**. Each branch has its own tracked kernel configuration.
 
 **3. Build the kernel:**
 
@@ -92,7 +92,7 @@ Full source lineage, explicit contributors and roles, and additional upstream fi
 
 ## License and redistribution notice
 
-The Linux kernel source tree is distributed under **GNU GPL-2.0-only** (see [`COPYING`](COPYING)); copyright and license notices of the original authors remain applicable. Kernel-side BakaSU code also contains GPL-2.0 licensing. **SUSFS upstream is marked GPL-3.0**, while this kernel tree uses GPL-2.0-only components. The compatibility of the combined `bks` source/binary distribution has **not** been established, and this repository does not claim a relicensing grant or special exception from SUSFS rights holders.
+The Linux kernel source tree is distributed under **GNU GPL-2.0-only** (see [`COPYING`](COPYING)); copyright and license notices of the original authors remain applicable. Kernel-side BakaSU code also contains GPL-2.0 licensing. **SUSFS upstream is marked GPL-3.0**, while this kernel tree uses GPL-2.0-only components. The compatibility of the combined `nabu-w-oss-bks` source/binary distribution has **not** been established, and this repository does not claim a relicensing grant or special exception from SUSFS rights holders.
 
 **Before redistributing combined SUSFS/kernel sources or binaries, independently review license compatibility and obtain any permissions that may be required.** The existence of this public repository or other published ports is not proof of such permission. This notice does not replace or override any upstream license terms.
 
