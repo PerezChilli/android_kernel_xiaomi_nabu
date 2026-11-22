@@ -21,8 +21,8 @@
 
 ## Optional root features
 
-- **BK / BKS:** integrate BakaSU v4.2.0-rc3 (35262) with `faccessat` and `stat` hook pointer types matching the actual VFS ABI.
-- **BKS only:** integrate SUSFS 2.3.0 NON-GKI, fix the inappropriate hot-section placement of `susfs_is_inode_sus_kstat`, retain the relevant kallsyms filtering and apply the SUS_MAP check in `show_map()` as well as `show_smap()`.
-- **No-root:** omit BakaSU and SUSFS while preserving the common BPF, GPU, display, battery and network functionality.
+- **`nabu-w-oss-bk` / `nabu-w-oss-bks`:** integrate BakaSU v4.2.0-rc3 (35262) with `faccessat` and `stat` hook pointer types matching the actual VFS ABI.
+- **`nabu-w-oss-bks` only:** integrate SUSFS 2.3.0 NON-GKI, fix the inappropriate hot-section placement of `susfs_is_inode_sus_kstat`, retain the relevant kallsyms filtering and apply the SUS_MAP check in `show_map()` as well as `show_smap()`.
+- **`nabu-w-oss` (no-root):** omit BakaSU and SUSFS while preserving the common BPF, GPU, display, battery and network functionality.
 
 The EROFS configuration was enabled in the `nabu-v-oss` base and is not claimed as an added feature.
