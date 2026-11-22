@@ -1,6 +1,6 @@
 # BakaSU Manager compatibility — Xiaomi Pad 5 (nabu)
 
-Applies to the [`bk`](https://github.com/PerezChilli/android_kernel_xiaomi_nabu/tree/bk) (BakaSU) and [`bks`](https://github.com/PerezChilli/android_kernel_xiaomi_nabu/tree/bks) (BakaSU + SUSFS 2.3.0) branches.
+Applies to the [`nabu-w-oss-bk`](https://github.com/PerezChilli/android_kernel_xiaomi_nabu/tree/nabu-w-oss-bk) (BakaSU) and [`nabu-w-oss-bks`](https://github.com/PerezChilli/android_kernel_xiaomi_nabu/tree/nabu-w-oss-bks) (BakaSU + SUSFS 2.3.0) branches.
 
 | Item | Required / matched value |
 | --- | --- |
@@ -11,7 +11,7 @@ Applies to the [`bk`](https://github.com/PerezChilli/android_kernel_xiaomi_nabu/
 | Bundled kernel-side BakaSU source | Revision `7b65bde` (`7b65bde0710b5e7c6f755545cb15a4abd417f3a8`) |
 | Kernel-side version string | `v4.2.0-rc3-7b65bde-offline` |
 | KernelSU API/UAPI | **6** |
-| `main` (no-root) branch | No Android root manager required or useful |
+| `nabu-w-oss` (no-root) branch | No Android root manager required or useful |
 
 The kernel-side values are defined in `KernelSU/kernel/Kbuild` and were corroborated against recorded kernel logs for previously working builds. Use the matching **BakaSU** manager instead of a generic KernelSU APK; other releases are not validated for this reconstruction.
 
