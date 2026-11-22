@@ -2,7 +2,7 @@
 
 ## Android 16 / HyperOS 3 eBPF support
 
-- **eBPF backport:** adapt the agate BPF implementation and its network, cgroup, VFS and API dependencies to Linux 4.14.180, including Android network BPF attachment and socket option call sites. Implement required behavior instead of returning success from stub functions.
+- **eBPF backport:** adapt the agate BPF implementation and its network, cgroup, VFS and API dependencies to Linux 4.14.180, including Android network BPF attachment, socket option call sites and the `CGROUP_INET_SOCK_RELEASE` hook during INET socket teardown. Implement required behavior instead of returning success from stub functions.
 
 ## GPU and display
 
@@ -17,7 +17,7 @@
 
 ## Networking
 
-- **IPv4 route race:** port upstream fix `5018c59607a5` so the prior route is moved onto the uncached route list instead of releasing a device reference while readers may still use it.
+- **Route and socket destination lifetime (R22–R24):** port upstream IPv4 fix `5018c59607a5`, and retire replaced FNHE routes to the uncached route list so an in-flight RCU reader does not lose the device reference prematurely. Reconcile the `dst_ops::negative_advice` callback contract across IPv4, IPv6, XFRM and DECnet: invalidate `sk_dst_cache` before releasing its socket-owned destination reference, avoiding stale cached routes after negative advice. The corrections target identified lifetime hazards; absence of all kernel memory-corruption paths is not yet established.
 
 ## Optional root features
 
