@@ -2,8 +2,6 @@
 
 Linux kernel source tree for **Xiaomi Pad 5 (nabu)**, adapted for **HyperOS 3 / Android 16**. The repository maintains three kernel configurations with a shared set of Android compatibility and device-specific changes.
 
-> **Development status:** R22 is a reconstructed source tree. Its Git history includes reconstructed snapshot commits, not the original upstream development history. These sources have **not** been proven byte-identical to previously working boot images, and earlier on-device test results must not be treated as validation of newly rebuilt R22 images. No stable release is claimed.
-
 ## Branches
 
 | Branch | Kernel configuration | Root support |
@@ -35,7 +33,7 @@ This is the **no-root** configuration. An Android root manager is not required a
 
 Build on **Linux** (Ubuntu/Debian or another environment with a case-sensitive filesystem). A typical macOS APFS checkout is case-insensitive and cannot hold every source file correctly (`xt_DSCP.c` and `xt_dscp.c` are different files); do not build from such a checkout. A Linux VM or WSL2 with files stored in the Linux filesystem is suitable.
 
-The R22 source trees are configured for **Clang/LLD 20.1.8**. The tracked script uses the selected branch's `recovery/BUILD_PROFILE` and `recovery/profile-reference.config` (there is no need to substitute a generic defconfig). It checks the compiler versions before building.
+The kernel variants are configured for **Clang/LLD 20.1.8**. The tracked script uses the selected branch's `recovery/BUILD_PROFILE` and `recovery/profile-reference.config` (there is no need to substitute a generic defconfig). It checks the compiler versions before building.
 
 **1. Install host dependencies (Ubuntu/Debian example):**
 
@@ -82,7 +80,7 @@ cat "$OUT/reference-config.diff"
 
 By default, build output is stored in `../out-nabu-<profile>/`. The `reference-config.diff` file should be inspected for changes introduced by `olddefconfig`; a nonempty diff may indicate configuration drift. Override the output path with `OUT=/absolute/output/directory` if needed.
 
-> **Important:** this procedure builds the kernel (`Image.gz-dtb`), **not** a flashable Android `boot.img`. Packaging a boot image requires matching boot-header parameters, device-specific boot components/ramdisk and separate verification. The reconstructed R22 source is not established as a byte-identical reproduction of earlier working images. Do not treat a successful compilation as a successful device boot test.
+> **Important:** this procedure builds the kernel (`Image.gz-dtb`), **not** a flashable Android `boot.img`. Packaging a boot image requires matching boot-header parameters, device-specific boot components/ramdisk and separate verification. Do not treat a successful compilation as a successful device boot test.
 
 For build-system details, see [`recovery/scripts/build-recovery.sh`](recovery/scripts/build-recovery.sh) and the tracked [`recovery/`](recovery/) files.
 

@@ -14,17 +14,17 @@ This document records the provenance and author roles of code incorporated into 
 | Non-GKI SUSFS reference | [`wxx9248/susfs4ksu`](https://github.com/wxx9248/susfs4ksu) | Non-GKI Linux 4.9 reference used in the agate port lineage |
 | Linux 4.14 SUSFS adaptation | [`souta-lab/agate-bakasu-susfs`](https://github.com/souta-lab/agate-bakasu-susfs/tree/feature/susfs-2.3.4.14-port) and upstream contributors | Intermediate Linux 4.14.336 / agate SUSFS 2.3.0 port adapted for nabu; not the original SUSFS author |
 | IPv4 route-race correction | [Linux upstream fix `5018c59607a5`](https://git.zx2c4.com/linux-rng/commit/?id=5018c59607a511cdee743b629c76206d9c9e6d7b) and original upstream contributors | Backported networking correction |
-| nabu integration and maintained repository | [`PerezChilli`](https://github.com/PerezChilli) | Reconstructed R22 Git/source trees; selection, adaptation and integration of kernel changes, project maintenance and device testing; no claim of exclusive authorship over upstream code |
+| nabu integration and maintained repository | [`PerezChilli`](https://github.com/PerezChilli) | Selection, adaptation and integration of kernel changes, project maintenance and device testing; no claim of exclusive authorship over upstream code |
 
-This list is a **project-level attribution overview**, not a replacement for original copyright headers and full contributor histories. Original notices in individual source files remain authoritative. The project uses recovered source snapshots and reconstructed commits; those commit author fields must not be interpreted as an exhaustive or original attribution record.
+This list is a **project-level attribution overview**, not a replacement for original copyright headers and full contributor histories. Original notices in individual source files remain authoritative. Repository commit metadata does not replace the original authorship and copyright records of imported components.
 
 ## Provenance notes
 
-- The initial nabu tree came from an archived `sticpaper_kernel_source-nabu-v-oss` source snapshot. The reconstructed baseline Git commit is an **import commit**, not the original upstream commit SHA.
+- The device-specific starting point is the published `sticpaper_kernel_source` `nabu-v-oss` source tree. The repository preserves upstream copyright notices and credits the source publisher.
 - eBPF-related code was adapted to Linux 4.14.180 from the agate Linux 4.14.336 line, with modifications to BPF internals, headers/UAPI, networking, socket/cgroup hooks and dependencies. This does **not** make the agate tree the base kernel.
 - The SUSFS chain is `simonpunk/susfs4ksu` → `wxx9248` (non-GKI reference) → `souta-lab` (agate 4.14 adaptation) → nabu adaptation. The separate upstream author and intermediate port maintainers are credited individually.
 - In the `base` snapshot, EROFS already exists and is enabled; it is not claimed as an independent local feature.
-- A successful build, older on-device functional tests or reconstructed version metadata do not prove a later R22 kernel is an exact reproduction of an earlier released binary.
+- A successful kernel compilation alone does not verify boot-image compatibility or on-device stability.
 
 ## License compatibility notice
 
